@@ -5,7 +5,7 @@
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-<title>Benchmarking BamScale: reader throughput and end-to-end workflow impact • BamScale</title>
+<title>Benchmarking BamScaleR: reader throughput and end-to-end workflow impact • BamScaleR</title>
 <!-- favicons --><link rel="icon" type="image/png" sizes="96x96" href="../favicon-96x96.png">
 <link rel="icon" type="”image/svg+xml”" href="../favicon.svg">
 <link rel="apple-touch-icon" sizes="180x180" href="../apple-touch-icon.png">
@@ -15,7 +15,7 @@
 <link href="../deps/bootstrap-5.3.8/bootstrap.min.css" rel="stylesheet">
 <script src="../deps/bootstrap-5.3.8/bootstrap.bundle.min.js"></script><link href="../deps/font-awesome-6.5.2/css/all.min.css" rel="stylesheet">
 <link href="../deps/font-awesome-6.5.2/css/v4-shims.min.css" rel="stylesheet">
-<script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Benchmarking BamScale: reader throughput and end-to-end workflow impact">
+<script src="../deps/headroom-0.11.0/headroom.min.js"></script><script src="../deps/headroom-0.11.0/jQuery.headroom.min.js"></script><script src="../deps/bootstrap-toc-1.0.1/bootstrap-toc.min.js"></script><script src="../deps/clipboard.js-2.0.11/clipboard.min.js"></script><script src="../deps/search-1.0.0/autocomplete.jquery.min.js"></script><script src="../deps/search-1.0.0/fuse.min.js"></script><script src="../deps/search-1.0.0/mark.min.js"></script><!-- pkgdown --><script src="../pkgdown.js"></script><meta property="og:title" content="Benchmarking BamScaleR: reader throughput and end-to-end workflow impact">
 </head>
 <body>
     <a href="#main" class="visually-hidden-focusable">Skip to contents</a>
@@ -23,9 +23,9 @@
 
     <nav class="navbar navbar-expand-lg fixed-top bg-light" data-bs-theme="light" aria-label="Site navigation"><div class="container">
 
-    <a class="navbar-brand me-2" href="../index.html">BamScale</a>
+    <a class="navbar-brand me-2" href="../index.html">BamScaleR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.99.14</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.99.0</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -40,8 +40,8 @@
   <ul class="dropdown-menu" aria-labelledby="dropdown-articles">
 <li><hr class="dropdown-divider"></li>
     <li><h6 class="dropdown-header" data-toc-skip>Articles</h6></li>
-    <li><a class="dropdown-item" href="../articles/BamScale-intro.html">Getting started with BamScale</a></li>
-    <li><a class="dropdown-item" href="../articles/benchmark-results.html">Benchmarking BamScale: reader throughput and end-to-end workflow impact</a></li>
+    <li><a class="dropdown-item" href="../articles/BamScaleR-intro.html">Getting started with BamScaleR</a></li>
+    <li><a class="dropdown-item" href="../articles/benchmark-results.html">Benchmarking BamScaleR: reader throughput and end-to-end workflow impact</a></li>
   </ul>
 </li>
 <li class="nav-item"><a class="nav-link" href="../news/index.html">Changelog</a></li>
@@ -50,7 +50,7 @@
 <li class="nav-item"><form class="form-inline" role="search">
  <input class="form-control" type="search" name="search-input" id="search-input" autocomplete="off" aria-label="Search site" placeholder="Search for" data-search-index="../search.json">
 </form></li>
-<li class="nav-item"><a class="external-link nav-link" href="https://github.com/cparsania/BamScale/" aria-label="GitHub"><span class="fa fab fa-github fa-lg"></span></a></li>
+<li class="nav-item"><a class="external-link nav-link" href="https://github.com/cparsania/BamScaleR/" aria-label="GitHub"><span class="fa fab fa-github fa-lg"></span></a></li>
       </ul>
 </div>
 
@@ -63,10 +63,10 @@
 
 <div class="row">
   <main id="main" class="col-md-9"><div class="page-header">
-      <img src="../logo.png" class="logo" alt=""><h1>Benchmarking BamScale: reader throughput and end-to-end workflow impact</h1>
+      <img src="../logo.png" class="logo" alt=""><h1>Benchmarking BamScaleR: reader throughput and end-to-end workflow impact</h1>
             
       
-      <small class="dont-index">Source: <a href="https://github.com/cparsania/BamScale/blob/main/vignettes/benchmark-results.Rmd" class="external-link"><code>vignettes/benchmark-results.Rmd</code></a></small>
+      <small class="dont-index">Source: <a href="https://github.com/cparsania/BamScaleR/blob/main/vignettes/benchmark-results.Rmd" class="external-link"><code>vignettes/benchmark-results.Rmd</code></a></small>
       <div class="d-none name"><code>benchmark-results.Rmd</code></div>
     </div>
 
@@ -75,7 +75,7 @@
 <div class="section level2">
 <h2 id="overview">Overview<a class="anchor" aria-label="anchor" href="#overview"></a>
 </h2>
-<p><code>BamScale</code> is a multithreaded BAM reader, built on the
+<p><code>BamScaleR</code> is a multithreaded BAM reader, built on the
 <code>ompBAM</code> OpenMP engine, that returns the same native
 Bioconductor objects as the standard readers and is a drop-in
 replacement for <code><a href="https://rdrr.io/pkg/Rsamtools/man/scanBam.html" class="external-link">Rsamtools::scanBam</a></code> and
@@ -85,7 +85,7 @@ speeds a workflow end-to-end <strong>only in proportion to the time that
 workflow spends reading</strong> (Amdahl’s law). This vignette
 summarises benchmarks that quantify <em>both</em> the raw read speedup
 and its end-to-end effect on two standard workflows — coverage/bigWig
-track generation and ATAC-seq fragment-size QC — with BamScale output
+track generation and ATAC-seq fragment-size QC — with BamScaleR output
 verified <strong>byte-identical</strong> to the standard tools.</p>
 <p>The numbers below are a concise summary of a representative benchmark
 run (Intel Xeon Gold 6252, 96 cores; warm page cache; median of 5
@@ -97,18 +97,18 @@ reproduce the full results.</p>
 <div class="section level2">
 <h2 id="read-throughput-on-a-single-large-bam">Read throughput on a single large BAM<a class="anchor" aria-label="anchor" href="#read-throughput-on-a-single-large-bam"></a>
 </h2>
-<p>On a single large BAM, BamScale reads <strong>2.5–4x faster</strong>
+<p>On a single large BAM, BamScaleR reads <strong>2.5–4x faster</strong>
 than the standard reader across three representative access patterns,
 because it spreads the BGZF decode across cores and assembles the output
 objects in native code:</p>
 <table class="table">
-<caption>Single-file read throughput: best BamScale configuration vs the
-single-threaded standard reader (median of 5 iterations).</caption>
+<caption>Single-file read throughput: best BamScaleR configuration vs
+the single-threaded standard reader (median of 5 iterations).</caption>
 <colgroup>
 <col width="20%">
 <col width="34%">
 <col width="13%">
-<col width="13%">
+<col width="14%">
 <col width="8%">
 <col width="8%">
 </colgroup>
@@ -116,7 +116,7 @@ single-threaded standard reader (median of 5 iterations).</caption>
 <th align="left">Workload</th>
 <th align="left">Reads</th>
 <th align="right">Standard (s)</th>
-<th align="right">BamScale (s)</th>
+<th align="right">BamScaleR (s)</th>
 <th align="right">Threads</th>
 <th align="left">Speedup</th>
 </tr></thead>
@@ -148,7 +148,7 @@ single-threaded standard reader (median of 5 iterations).</caption>
 </tbody>
 </table>
 <p><img src="benchmark-results_files/figure-html/read-plot-1.png" class="r-plt" alt="" width="840"></p>
-<p>Two honest points. At <strong>one thread</strong> BamScale is
+<p>Two honest points. At <strong>one thread</strong> BamScaleR is
 modestly faster than the single-threaded readers (about 1.1–1.3x, from
 native-code object assembly); most of the win comes from threading, and
 the scaling is <strong>strongly sublinear</strong> – roughly 2.5–4x on
@@ -157,13 +157,13 @@ not near-linear scaling but the ability to use cores that a
 single-threaded reader cannot use at all – as on one large BAM in an
 interactive session. Object-free command-line decoders such as
 <code>samtools</code> reach several-fold higher <em>raw</em> throughput,
-but return no Bioconductor object; BamScale’s role is fast,
+but return no Bioconductor object; BamScaleR’s role is fast,
 object-faithful decoding <em>inside</em> R.</p>
 </div>
 <div class="section level2">
 <h2 id="end-to-end-impact-tracks-the-read-fraction">End-to-end impact tracks the read fraction<a class="anchor" aria-label="anchor" href="#end-to-end-impact-tracks-the-read-fraction"></a>
 </h2>
-<p>Embedding BamScale as the read step of a complete workflow, the
+<p>Embedding BamScaleR as the read step of a complete workflow, the
 end-to-end speedup follows how read-dominated that workflow is (Amdahl’s
 law):</p>
 <table class="table">
@@ -219,7 +219,7 @@ is the share of the standard pipeline spent reading.</caption>
 <ul>
 <li>
 <strong>ATAC fragment-size QC</strong> is nearly pure read, so
-BamScale’s read speedup carries through almost intact:
+BamScaleR’s read speedup carries through almost intact:
 <strong>4.14x</strong> end-to-end.</li>
 <li>
 <strong>Coverage -&gt; bigWig</strong> is dominated by the shared,
@@ -227,11 +227,10 @@ single-threaded <code><a href="https://rdrr.io/pkg/rtracklayer/man/BigWigFile.ht
 on both arms), so the end-to-end gain is bounded at
 <strong>1.24x</strong> even though the read phase itself is 6.6x faster.
 Stopping at the in-memory coverage <code>RleList</code> – what many
-analyses consume next – recovers a <strong>3.29x</strong> gain. (Since
-0.99.14, <code><a href="../reference/bam_coverage.html">bam_coverage()</a></code> and
-<code><a href="../reference/bam_coverage_bigwig.html">bam_coverage_bigwig()</a></code> compute these endpoints directly
-inside the reader, removing the R-side read phase entirely; see the
-function documentation.)</li>
+analyses consume next – recovers a <strong>3.29x</strong> gain.
+(<code><a href="../reference/bam_coverage.html">bam_coverage()</a></code> and <code><a href="../reference/bam_coverage_bigwig.html">bam_coverage_bigwig()</a></code>
+compute these endpoints directly inside the reader, removing the R-side
+read phase entirely; see the function documentation.)</li>
 </ul>
 </div>
 <div class="section level2">
@@ -242,23 +241,22 @@ At <strong>matched core counts</strong> (both arms given the same number
 of cores) the two readers are approximately at parity for multi-file
 processing (coverage ~1.13x, ATAC ~0.99x): the single-threaded reader
 already saturates a machine by parallelising <em>across</em> files, so
-BamScale’s multi-file advantage comes specifically from also threading
+BamScaleR’s multi-file advantage comes specifically from also threading
 <em>within</em> a file – which pays off when there are fewer files than
 cores.</p>
 </div>
 <div class="section level2">
-<h2 id="beyond-reading-in-reader-aggregation-new-in-0-99-14">Beyond reading: in-reader aggregation (new in 0.99.14)<a class="anchor" aria-label="anchor" href="#beyond-reading-in-reader-aggregation-new-in-0-99-14"></a>
+<h2 id="beyond-reading-in-reader-aggregation">Beyond reading: in-reader aggregation<a class="anchor" aria-label="anchor" href="#beyond-reading-in-reader-aggregation"></a>
 </h2>
 <p>For workflows whose endpoint is a summary rather than the alignments
-themselves, BamScale 0.99.14 adds four functions that fold the
-computation inside the multithreaded reader, so no per-read R objects
-are ever materialised: <code><a href="../reference/fragment_sizes.html">fragment_sizes()</a></code> (paired-end
-fragment-size distribution), <code><a href="../reference/mapq_dist.html">mapq_dist()</a></code> (mapping-quality
-distribution), <code><a href="../reference/bam_coverage.html">bam_coverage()</a></code> (per-base coverage
-<code>RleList</code>), and <code><a href="../reference/bam_coverage_bigwig.html">bam_coverage_bigwig()</a></code>
-(single-pass BAM to bigWig with parallel block compression). Each is
-verified byte-identical to its standard equivalent
-(<code>table(abs(scanBam(isize)))</code>,
+themselves, BamScaleR provides four functions that fold the computation
+inside the multithreaded reader, so no per-read R objects are ever
+materialised: <code><a href="../reference/fragment_sizes.html">fragment_sizes()</a></code> (paired-end fragment-size
+distribution), <code><a href="../reference/mapq_dist.html">mapq_dist()</a></code> (mapping-quality distribution),
+<code><a href="../reference/bam_coverage.html">bam_coverage()</a></code> (per-base coverage <code>RleList</code>),
+and <code><a href="../reference/bam_coverage_bigwig.html">bam_coverage_bigwig()</a></code> (single-pass BAM to bigWig with
+parallel block compression). Each is verified byte-identical to its
+standard equivalent (<code>table(abs(scanBam(isize)))</code>,
 <code>table(scanBam(mapq))</code>,
 <code>coverage(readGAlignments())</code>, and the serial bigWig writer
 respectively) – see their reference pages. These remove the read phase
@@ -275,14 +273,14 @@ tool. The coverage <code>RleList</code> is <code><a href="https://rdrr.io/r/base
 fragment-size table is <code><a href="https://rdrr.io/r/base/identical.html" class="external-link">identical()</a></code> to
 <code><a href="https://rdrr.io/pkg/Rsamtools/man/scanBam.html" class="external-link">Rsamtools::scanBam</a></code> and byte-identical (maximum absolute
 difference 0) to <code>ATACseqQC::fragSizeDist</code> over 49.8 million
-reads. This is what makes BamScale a genuine drop-in rather than an
+reads. This is what makes BamScaleR a genuine drop-in rather than an
 approximation.</p>
 </div>
 <div class="section level2">
 <h2 id="try-it">Try it<a class="anchor" aria-label="anchor" href="#try-it"></a>
 </h2>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://cparsania.github.io/BamScale/">BamScale</a></span><span class="op">)</span></span>
+<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://cparsania.github.io/BamScaleR/">BamScaleR</a></span><span class="op">)</span></span>
 <span><span class="va">bam</span> <span class="op">&lt;-</span> <span class="fu">ompBAM</span><span class="fu">::</span><span class="fu"><a href="https://rdrr.io/pkg/ompBAM/man/example_BAM.html" class="external-link">example_BAM</a></span><span class="op">(</span><span class="st">"Unsorted"</span><span class="op">)</span></span>
 <span></span>
 <span><span class="co">## Alignment fields as a GAlignments object (drop-in for readGAlignments)</span></span>
@@ -337,7 +335,7 @@ approximation.</p>
 <p>The complete benchmark harness ships under
 <code>inst/benchmarks/</code>:</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/list.files.html" class="external-link">dir</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/system.file.html" class="external-link">system.file</a></span><span class="op">(</span><span class="st">"benchmarks"</span>, package <span class="op">=</span> <span class="st">"BamScale"</span><span class="op">)</span><span class="op">)</span></span>
+<code class="sourceCode R"><span><span class="fu"><a href="https://rdrr.io/r/base/list.files.html" class="external-link">dir</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/system.file.html" class="external-link">system.file</a></span><span class="op">(</span><span class="st">"benchmarks"</span>, package <span class="op">=</span> <span class="st">"BamScaleR"</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="co"># run_server_benchmark.R      : read-pattern micro-benchmarks (step1 / GAlignments / seq+qual)</span></span>
 <span><span class="co"># run_workflow_benchmark.R    : end-to-end coverage and ATAC fragment-size QC workflows</span></span>
 <span><span class="co"># download_atac_data.R        : fetch + index the ENCODE GM12878 ATAC BAMs used here</span></span></code></pre></div>
@@ -350,7 +348,7 @@ are derived.</p>
 </h2>
 <pre><code><span><span class="co">## R version 4.6.1 (2026-06-24)</span></span>
 <span><span class="co">## Platform: x86_64-pc-linux-gnu</span></span>
-<span><span class="co">## Running under: Ubuntu 24.04.4 LTS</span></span>
+<span><span class="co">## Running under: Ubuntu 24.04.5 LTS</span></span>
 <span><span class="co">## </span></span>
 <span><span class="co">## Matrix products: default</span></span>
 <span><span class="co">## BLAS:   /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3 </span></span>
@@ -369,11 +367,11 @@ are derived.</p>
 <span><span class="co">## [1] stats     graphics  grDevices utils     datasets  methods   base     </span></span>
 <span><span class="co">## </span></span>
 <span><span class="co">## other attached packages:</span></span>
-<span><span class="co">## [1] BamScale_0.99.14 ggplot2_4.0.3    BiocStyle_2.40.0</span></span>
+<span><span class="co">## [1] BamScaleR_0.99.0 ggplot2_4.0.3    BiocStyle_2.40.0</span></span>
 <span><span class="co">## </span></span>
 <span><span class="co">## loaded via a namespace (and not attached):</span></span>
 <span><span class="co">##  [1] SummarizedExperiment_1.42.0 gtable_0.3.6               </span></span>
-<span><span class="co">##  [3] xfun_0.60                   bslib_0.12.0               </span></span>
+<span><span class="co">##  [3] xfun_0.61                   bslib_0.12.0               </span></span>
 <span><span class="co">##  [5] Biobase_2.72.0              lattice_0.22-9             </span></span>
 <span><span class="co">##  [7] vctrs_0.7.3                 tools_4.6.1                </span></span>
 <span><span class="co">##  [9] bitops_1.1-0                generics_0.1.4             </span></span>
@@ -381,10 +379,10 @@ are derived.</p>
 <span><span class="co">## [13] tibble_3.3.1                pkgconfig_2.0.3            </span></span>
 <span><span class="co">## [15] Matrix_1.7-5                RColorBrewer_1.1-3         </span></span>
 <span><span class="co">## [17] S7_0.2.2                    desc_1.4.3                 </span></span>
-<span><span class="co">## [19] S4Vectors_0.50.1            cigarillo_1.2.1            </span></span>
+<span><span class="co">## [19] S4Vectors_0.50.3            cigarillo_1.2.1            </span></span>
 <span><span class="co">## [21] lifecycle_1.0.5             compiler_4.6.1             </span></span>
 <span><span class="co">## [23] farver_2.1.2                Rsamtools_2.28.0           </span></span>
-<span><span class="co">## [25] textshaping_1.0.5           Biostrings_2.80.1          </span></span>
+<span><span class="co">## [25] textshaping_1.0.5           Biostrings_2.80.2          </span></span>
 <span><span class="co">## [27] Seqinfo_1.2.0               codetools_0.2-20           </span></span>
 <span><span class="co">## [29] GenomeInfoDb_1.48.0         htmltools_0.5.9            </span></span>
 <span><span class="co">## [31] sass_0.4.10                 yaml_2.3.12                </span></span>
@@ -394,16 +392,16 @@ are derived.</p>
 <span><span class="co">## [39] DelayedArray_0.38.2         abind_1.4-8                </span></span>
 <span><span class="co">## [41] ompBAM_1.16.0               tidyselect_1.2.1           </span></span>
 <span><span class="co">## [43] digest_0.6.39               dplyr_1.2.1                </span></span>
-<span><span class="co">## [45] bookdown_0.47               labeling_0.4.3             </span></span>
+<span><span class="co">## [45] bookdown_0.48               labeling_0.4.3             </span></span>
 <span><span class="co">## [47] fastmap_1.2.0               grid_4.6.1                 </span></span>
-<span><span class="co">## [49] cli_3.6.6                   SparseArray_1.12.2         </span></span>
-<span><span class="co">## [51] magrittr_2.0.5              S4Arrays_1.12.0            </span></span>
+<span><span class="co">## [49] cli_3.6.6                   SparseArray_1.12.3         </span></span>
+<span><span class="co">## [51] magrittr_2.0.5              S4Arrays_1.12.1            </span></span>
 <span><span class="co">## [53] withr_3.0.3                 UCSC.utils_1.8.0           </span></span>
-<span><span class="co">## [55] scales_1.4.0                httr_1.4.8                 </span></span>
-<span><span class="co">## [57] rmarkdown_2.31              XVector_0.52.0             </span></span>
+<span><span class="co">## [55] scales_1.4.0                httr_1.4.9                 </span></span>
+<span><span class="co">## [57] rmarkdown_2.32              XVector_0.52.0             </span></span>
 <span><span class="co">## [59] matrixStats_1.5.0           otel_0.2.0                 </span></span>
 <span><span class="co">## [61] ragg_1.5.2                  evaluate_1.0.5             </span></span>
-<span><span class="co">## [63] knitr_1.51                  GenomicRanges_1.64.0       </span></span>
+<span><span class="co">## [63] knitr_1.52                  GenomicRanges_1.64.0       </span></span>
 <span><span class="co">## [65] IRanges_2.46.0              rlang_1.3.0                </span></span>
 <span><span class="co">## [67] Rcpp_1.1.2                  glue_1.8.1                 </span></span>
 <span><span class="co">## [69] BiocManager_1.30.27         BiocGenerics_0.58.1        </span></span>

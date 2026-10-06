@@ -77,7 +77,24 @@ order. For multiple input files, a named list of such data.frames.
 
 ## See also
 
-[`bam_read()`](https://cparsania.github.io/BamScale/reference/bam_read.md)
+[`bam_read()`](https://cparsania.github.io/BamScaleR/reference/bam_read.md)
 for reading records,
-[`bam_count()`](https://cparsania.github.io/BamScale/reference/bam_count.md)
+[`bam_count()`](https://cparsania.github.io/BamScaleR/reference/bam_count.md)
 for per-chromosome counts.
+
+## Examples
+
+``` r
+bam <- ompBAM::example_BAM("Unsorted")
+
+# Fragment-size (insert-size) distribution computed inside the reader
+fs <- fragment_sizes(bam, threads = 2)
+head(fs)
+#>   fragment_size count
+#> 1            59     2
+#> 2            76     2
+#> 3            78     2
+#> 4            79     2
+#> 5            84     4
+#> 6            85     2
+```

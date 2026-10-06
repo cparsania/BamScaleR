@@ -1,8 +1,8 @@
-# Benchmarking BamScale: reader throughput and end-to-end workflow impact
+# Benchmarking BamScaleR: reader throughput and end-to-end workflow impact
 
 ## Overview
 
-`BamScale` is a multithreaded BAM reader, built on the `ompBAM` OpenMP
+`BamScaleR` is a multithreaded BAM reader, built on the `ompBAM` OpenMP
 engine, that returns the same native Bioconductor objects as the
 standard readers and is a drop-in replacement for
 [`Rsamtools::scanBam`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html)
@@ -14,7 +14,7 @@ a workflow end-to-end **only in proportion to the time that workflow
 spends reading** (Amdahl’s law). This vignette summarises benchmarks
 that quantify *both* the raw read speedup and its end-to-end effect on
 two standard workflows — coverage/bigWig track generation and ATAC-seq
-fragment-size QC — with BamScale output verified **byte-identical** to
+fragment-size QC — with BamScaleR output verified **byte-identical** to
 the standard tools.
 
 The numbers below are a concise summary of a representative benchmark
@@ -26,23 +26,23 @@ results.
 
 ## Read throughput on a single large BAM
 
-On a single large BAM, BamScale reads **2.5–4x faster** than the
+On a single large BAM, BamScaleR reads **2.5–4x faster** than the
 standard reader across three representative access patterns, because it
 spreads the BGZF decode across cores and assembles the output objects in
 native code:
 
-| Workload | Reads | Standard (s) | BamScale (s) | Threads | Speedup |
+| Workload | Reads | Standard (s) | BamScaleR (s) | Threads | Speedup |
 |:---|:---|---:|---:|---:|:---|
 | Core fields | qname/flag/rname/pos/mapq/cigar | 15.4 | 6.3 | 48 | 2.45x |
 | GAlignments | -\> GAlignments object | 10.6 | 2.6 | 48 | 4.03x |
 | Sequence + quality | seq + base quality | 21.6 | 7.0 | 48 | 3.09x |
 
-Single-file read throughput: best BamScale configuration vs the
+Single-file read throughput: best BamScaleR configuration vs the
 single-threaded standard reader (median of 5 iterations). {.table}
 
 ![](benchmark-results_files/figure-html/read-plot-1.png)
 
-Two honest points. At **one thread** BamScale is modestly faster than
+Two honest points. At **one thread** BamScaleR is modestly faster than
 the single-threaded readers (about 1.1–1.3x, from native-code object
 assembly); most of the win comes from threading, and the scaling is
 **strongly sublinear** – roughly 2.5–4x on 48 threads, largely
@@ -50,12 +50,12 @@ saturating between 24 and 48 threads. The value is not near-linear
 scaling but the ability to use cores that a single-threaded reader
 cannot use at all – as on one large BAM in an interactive session.
 Object-free command-line decoders such as `samtools` reach several-fold
-higher *raw* throughput, but return no Bioconductor object; BamScale’s
+higher *raw* throughput, but return no Bioconductor object; BamScaleR’s
 role is fast, object-faithful decoding *inside* R.
 
 ## End-to-end impact tracks the read fraction
 
-Embedding BamScale as the read step of a complete workflow, the
+Embedding BamScaleR as the read step of a complete workflow, the
 end-to-end speedup follows how read-dominated that workflow is (Amdahl’s
 law):
 
@@ -74,17 +74,17 @@ is the share of the standard pipeline spent reading. {.table}
 
 ![](benchmark-results_files/figure-html/spectrum-plot-1.png)
 
-- **ATAC fragment-size QC** is nearly pure read, so BamScale’s read
+- **ATAC fragment-size QC** is nearly pure read, so BamScaleR’s read
   speedup carries through almost intact: **4.14x** end-to-end.
 - **Coverage -\> bigWig** is dominated by the shared, single-threaded
   [`rtracklayer::export.bw`](https://rdrr.io/pkg/rtracklayer/man/BigWigFile.html)
   step (identical work on both arms), so the end-to-end gain is bounded
   at **1.24x** even though the read phase itself is 6.6x faster.
   Stopping at the in-memory coverage `RleList` – what many analyses
-  consume next – recovers a **3.29x** gain. (Since 0.99.14,
-  [`bam_coverage()`](https://cparsania.github.io/BamScale/reference/bam_coverage.md)
+  consume next – recovers a **3.29x** gain.
+  ([`bam_coverage()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage.md)
   and
-  [`bam_coverage_bigwig()`](https://cparsania.github.io/BamScale/reference/bam_coverage_bigwig.md)
+  [`bam_coverage_bigwig()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage_bigwig.md)
   compute these endpoints directly inside the reader, removing the
   R-side read phase entirely; see the function documentation.)
 
@@ -94,23 +94,23 @@ A multithreaded reader can occupy cores a single-threaded one cannot. At
 **matched core counts** (both arms given the same number of cores) the
 two readers are approximately at parity for multi-file processing
 (coverage ~1.13x, ATAC ~0.99x): the single-threaded reader already
-saturates a machine by parallelising *across* files, so BamScale’s
+saturates a machine by parallelising *across* files, so BamScaleR’s
 multi-file advantage comes specifically from also threading *within* a
 file – which pays off when there are fewer files than cores.
 
-## Beyond reading: in-reader aggregation (new in 0.99.14)
+## Beyond reading: in-reader aggregation
 
 For workflows whose endpoint is a summary rather than the alignments
-themselves, BamScale 0.99.14 adds four functions that fold the
-computation inside the multithreaded reader, so no per-read R objects
-are ever materialised:
-[`fragment_sizes()`](https://cparsania.github.io/BamScale/reference/fragment_sizes.md)
+themselves, BamScaleR provides four functions that fold the computation
+inside the multithreaded reader, so no per-read R objects are ever
+materialised:
+[`fragment_sizes()`](https://cparsania.github.io/BamScaleR/reference/fragment_sizes.md)
 (paired-end fragment-size distribution),
-[`mapq_dist()`](https://cparsania.github.io/BamScale/reference/mapq_dist.md)
+[`mapq_dist()`](https://cparsania.github.io/BamScaleR/reference/mapq_dist.md)
 (mapping-quality distribution),
-[`bam_coverage()`](https://cparsania.github.io/BamScale/reference/bam_coverage.md)
+[`bam_coverage()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage.md)
 (per-base coverage `RleList`), and
-[`bam_coverage_bigwig()`](https://cparsania.github.io/BamScale/reference/bam_coverage_bigwig.md)
+[`bam_coverage_bigwig()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage_bigwig.md)
 (single-pass BAM to bigWig with parallel block compression). Each is
 verified byte-identical to its standard equivalent
 (`table(abs(scanBam(isize)))`, `table(scanBam(mapq))`,
@@ -131,13 +131,13 @@ fragment-size table is
 [`Rsamtools::scanBam`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html)
 and byte-identical (maximum absolute difference 0) to
 `ATACseqQC::fragSizeDist` over 49.8 million reads. This is what makes
-BamScale a genuine drop-in rather than an approximation.
+BamScaleR a genuine drop-in rather than an approximation.
 
 ## Try it
 
 ``` r
 
-library(BamScale)
+library(BamScaleR)
 bam <- ompBAM::example_BAM("Unsorted")
 
 ## Alignment fields as a GAlignments object (drop-in for readGAlignments)
@@ -198,7 +198,7 @@ The complete benchmark harness ships under `inst/benchmarks/`:
 
 ``` r
 
-dir(system.file("benchmarks", package = "BamScale"))
+dir(system.file("benchmarks", package = "BamScaleR"))
 # run_server_benchmark.R      : read-pattern micro-benchmarks (step1 / GAlignments / seq+qual)
 # run_workflow_benchmark.R    : end-to-end coverage and ATAC fragment-size QC workflows
 # download_atac_data.R        : fetch + index the ENCODE GM12878 ATAC BAMs used here
@@ -211,7 +211,7 @@ correctness metadata, from which the summary figures above are derived.
 
     ## R version 4.6.1 (2026-06-24)
     ## Platform: x86_64-pc-linux-gnu
-    ## Running under: Ubuntu 24.04.4 LTS
+    ## Running under: Ubuntu 24.04.5 LTS
     ## 
     ## Matrix products: default
     ## BLAS:   /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3 
@@ -230,11 +230,11 @@ correctness metadata, from which the summary figures above are derived.
     ## [1] stats     graphics  grDevices utils     datasets  methods   base     
     ## 
     ## other attached packages:
-    ## [1] BamScale_0.99.14 ggplot2_4.0.3    BiocStyle_2.40.0
+    ## [1] BamScaleR_0.99.0 ggplot2_4.0.3    BiocStyle_2.40.0
     ## 
     ## loaded via a namespace (and not attached):
     ##  [1] SummarizedExperiment_1.42.0 gtable_0.3.6               
-    ##  [3] xfun_0.60                   bslib_0.12.0               
+    ##  [3] xfun_0.61                   bslib_0.12.0               
     ##  [5] Biobase_2.72.0              lattice_0.22-9             
     ##  [7] vctrs_0.7.3                 tools_4.6.1                
     ##  [9] bitops_1.1-0                generics_0.1.4             
@@ -242,10 +242,10 @@ correctness metadata, from which the summary figures above are derived.
     ## [13] tibble_3.3.1                pkgconfig_2.0.3            
     ## [15] Matrix_1.7-5                RColorBrewer_1.1-3         
     ## [17] S7_0.2.2                    desc_1.4.3                 
-    ## [19] S4Vectors_0.50.1            cigarillo_1.2.1            
+    ## [19] S4Vectors_0.50.3            cigarillo_1.2.1            
     ## [21] lifecycle_1.0.5             compiler_4.6.1             
     ## [23] farver_2.1.2                Rsamtools_2.28.0           
-    ## [25] textshaping_1.0.5           Biostrings_2.80.1          
+    ## [25] textshaping_1.0.5           Biostrings_2.80.2          
     ## [27] Seqinfo_1.2.0               codetools_0.2-20           
     ## [29] GenomeInfoDb_1.48.0         htmltools_0.5.9            
     ## [31] sass_0.4.10                 yaml_2.3.12                
@@ -255,16 +255,16 @@ correctness metadata, from which the summary figures above are derived.
     ## [39] DelayedArray_0.38.2         abind_1.4-8                
     ## [41] ompBAM_1.16.0               tidyselect_1.2.1           
     ## [43] digest_0.6.39               dplyr_1.2.1                
-    ## [45] bookdown_0.47               labeling_0.4.3             
+    ## [45] bookdown_0.48               labeling_0.4.3             
     ## [47] fastmap_1.2.0               grid_4.6.1                 
-    ## [49] cli_3.6.6                   SparseArray_1.12.2         
-    ## [51] magrittr_2.0.5              S4Arrays_1.12.0            
+    ## [49] cli_3.6.6                   SparseArray_1.12.3         
+    ## [51] magrittr_2.0.5              S4Arrays_1.12.1            
     ## [53] withr_3.0.3                 UCSC.utils_1.8.0           
-    ## [55] scales_1.4.0                httr_1.4.8                 
-    ## [57] rmarkdown_2.31              XVector_0.52.0             
+    ## [55] scales_1.4.0                httr_1.4.9                 
+    ## [57] rmarkdown_2.32              XVector_0.52.0             
     ## [59] matrixStats_1.5.0           otel_0.2.0                 
     ## [61] ragg_1.5.2                  evaluate_1.0.5             
-    ## [63] knitr_1.51                  GenomicRanges_1.64.0       
+    ## [63] knitr_1.52                  GenomicRanges_1.64.0       
     ## [65] IRanges_2.46.0              rlang_1.3.0                
     ## [67] Rcpp_1.1.2                  glue_1.8.1                 
     ## [69] BiocManager_1.30.27         BiocGenerics_0.58.1        

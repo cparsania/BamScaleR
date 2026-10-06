@@ -2,9 +2,9 @@ pandoc: 3.8.3
 pkgdown: 2.2.1
 pkgdown_sha: ~
 articles:
-  BamScale-intro: BamScale-intro.html
+  BamScaleR-intro: BamScaleR-intro.html
   benchmark-results: benchmark-results.html
-last_built: 2026-08-13T05:35Z
+last_built: 2026-10-06T05:20Z
 urls:
-  reference: https://cparsania.github.io/BamScale/reference
-  article: https://cparsania.github.io/BamScale/articles
+  reference: https://cparsania.github.io/BamScaleR/reference
+  article: https://cparsania.github.io/BamScaleR/articles

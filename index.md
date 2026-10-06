@@ -1,25 +1,25 @@
-# BamScale
+# BamScaleR
 
 > Bioconductor-friendly multithreaded BAM processing
 
 [![GitHub
-version](https://img.shields.io/github/r-package/v/cparsania/BamScale?label=GitHub&logo=github&color=blue)](https://github.com/cparsania/BamScale)
+version](https://img.shields.io/github/r-package/v/cparsania/BamScaleR?label=GitHub&logo=github&color=blue)](https://github.com/cparsania/BamScaleR)
 [![Bioc devel
-version](https://bioc.r-universe.dev/badges/BamScale?label=Bioc%20devel)](https://bioconductor.org/packages/3.24/bioc/html/BamScale.html)
+version](https://bioc.r-universe.dev/badges/BamScaleR?label=Bioc%20devel)](https://bioconductor.org/packages/3.24/bioc/html/BamScaleR.html)
 [![Bioc
-release](https://img.shields.io/badge/Bioc%20release-upcoming%20(3.24)-orange)](https://bioconductor.org/packages/3.24/bioc/html/BamScale.html)
-[![R-CMD-check](https://github.com/cparsania/BamScale/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/cparsania/BamScale/actions/workflows/R-CMD-check.yaml)
+release](https://img.shields.io/badge/Bioc%20release-upcoming%20(3.24)-orange)](https://bioconductor.org/packages/3.24/bioc/html/BamScaleR.html)
+[![R-CMD-check](https://github.com/cparsania/BamScaleR/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/cparsania/BamScaleR/actions/workflows/R-CMD-check.yaml)
 [![Bioc
-build](https://bioconductor.org/shields/build/devel/bioc/BamScale.svg)](https://bioconductor.org/checkResults/devel/bioc-LATEST/BamScale/)
-[![pkgdown](https://github.com/cparsania/BamScale/actions/workflows/pkgdown.yaml/badge.svg)](https://github.com/cparsania/BamScale/actions/workflows/pkgdown.yaml)
+build](https://bioconductor.org/shields/build/devel/bioc/BamScaleR.svg)](https://bioconductor.org/checkResults/devel/bioc-LATEST/BamScaleR/)
+[![pkgdown](https://github.com/cparsania/BamScaleR/actions/workflows/pkgdown.yaml/badge.svg)](https://github.com/cparsania/BamScaleR/actions/workflows/pkgdown.yaml)
 [![Bioconductor
-availability](https://bioconductor.org/shields/availability/devel/BamScale.svg)](https://bioconductor.org/packages/3.24/bioc/html/BamScale.html)
+availability](https://bioconductor.org/shields/availability/devel/BamScaleR.svg)](https://bioconductor.org/packages/3.24/bioc/html/BamScaleR.html)
 [![Bioc
-downloads](https://bioconductor.org/shields/downloads/devel/BamScale.svg)](https://bioconductor.org/packages/stats/bioc/BamScale/)
+downloads](https://bioconductor.org/shields/downloads/devel/BamScaleR.svg)](https://bioconductor.org/packages/stats/bioc/BamScaleR/)
 [![License:
-MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://cparsania.github.io/BamScale/LICENSE)
+MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://cparsania.github.io/BamScaleR/LICENSE)
 
-**BamScale** is a multithreaded BAM reader for R, built on the
+**BamScaleR** is a multithreaded BAM reader for R, built on the
 [`ompBAM`](https://bioconductor.org/packages/ompBAM) OpenMP engine. It
 returns the *exact* Bioconductor objects you already use — verified
 **byte-identical** to `Rsamtools` and `GenomicAlignments` — but decodes
@@ -29,12 +29,12 @@ in alignment-centric workflows.
 - **2.5–4× faster** single-file reads than `scanBam` / `readGAlignments`
 - **Drop-in**: same objects, same `ScanBamParam` filtering, same
   `BiocParallel` model
-- **In-reader aggregation** (0.99.14):
-  [`fragment_sizes()`](https://cparsania.github.io/BamScale/reference/fragment_sizes.md),
-  [`mapq_dist()`](https://cparsania.github.io/BamScale/reference/mapq_dist.md),
-  [`bam_coverage()`](https://cparsania.github.io/BamScale/reference/bam_coverage.md),
+- **In-reader aggregation**:
+  [`fragment_sizes()`](https://cparsania.github.io/BamScaleR/reference/fragment_sizes.md),
+  [`mapq_dist()`](https://cparsania.github.io/BamScaleR/reference/mapq_dist.md),
+  [`bam_coverage()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage.md),
   and single-pass
-  [`bam_coverage_bigwig()`](https://cparsania.github.io/BamScale/reference/bam_coverage_bigwig.md)
+  [`bam_coverage_bigwig()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage_bigwig.md)
   fold the computation inside the reader — byte-identical results
   without materialising per-read objects
 - **Two parallel axes**: OpenMP `threads` *within* a file,
@@ -47,18 +47,18 @@ in alignment-centric workflows.
 Intel Xeon Gold 6252 (96 cores), warm page cache, median of 5
 iterations. Full methodology, figures, and fair-comparison details are
 in the [benchmark
-article](https://cparsania.github.io/BamScale/articles/benchmark-results.html).
+article](https://cparsania.github.io/BamScaleR/articles/benchmark-results.html).
 
-**Single-file read throughput** — best BamScale configuration vs the
+**Single-file read throughput** — best BamScaleR configuration vs the
 single-threaded standard reader:
 
-| Read pattern | Comparator | Standard | BamScale | Threads | Speedup |
+| Read pattern | Comparator | Standard | BamScaleR | Threads | Speedup |
 |----|----|---:|---:|:--:|:--:|
 | Core alignment fields | [`Rsamtools::scanBam`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html) | 15.4 s | 6.3 s | 48 | **2.5×** |
 | `GAlignments` object | [`GenomicAlignments::readGAlignments`](https://rdrr.io/pkg/GenomicAlignments/man/readGAlignments.html) | 10.6 s | 2.6 s | 48 | **4.0×** |
 | Sequence + base quality | [`Rsamtools::scanBam`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html) | 21.6 s | 7.0 s | 48 | **3.1×** |
 
-**End-to-end workflows** — BamScale swapped in for the read step only,
+**End-to-end workflows** — BamScaleR swapped in for the read step only,
 every other step identical on both sides. The gain tracks how read-bound
 the workflow is (Amdahl’s law):
 
@@ -75,7 +75,7 @@ is [`identical()`](https://rdrr.io/r/base/identical.html) to
 [`GenomicAlignments::coverage()`](https://rdrr.io/pkg/IRanges/man/coverage-methods.html)
 at every thread count.
 
-> BamScale is not a raw-decode replacement for command-line `samtools`.
+> BamScaleR is not a raw-decode replacement for command-line `samtools`.
 > Its job is fast, object-faithful decoding *inside* R — putting the
 > cores a single-threaded reader leaves idle to work, and handing back
 > the precise Bioconductor objects your analysis depends on.
@@ -85,29 +85,29 @@ at every thread count.
 Requires R with a C++17 toolchain and an OpenMP-capable compiler;
 `ompBAM` and the other dependencies are pulled in automatically.
 
-BamScale is on
-[Bioconductor](https://bioconductor.org/packages/3.24/bioc/html/BamScale.html)
+BamScaleR is on
+[Bioconductor](https://bioconductor.org/packages/3.24/bioc/html/BamScaleR.html)
 (currently in the `devel` branch):
 
 ``` r
 
 if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
 BiocManager::install(version = "devel")
-BiocManager::install("BamScale")
+BiocManager::install("BamScaleR")
 ```
 
 Or install the development version from GitHub:
 
 ``` r
 
-remotes::install_github("cparsania/BamScale")
+remotes::install_github("cparsania/BamScaleR")
 ```
 
 ## Quick start
 
 ``` r
 
-library(BamScale)
+library(BamScaleR)
 
 bam <- ompBAM::example_BAM("Unsorted")
 
@@ -137,7 +137,7 @@ sq <- bam_read(
 # Fast chromosome-level counts
 cnt <- bam_count(bam, threads = 4)
 
-# In-reader aggregation (0.99.14): summaries computed inside the C++ reader,
+# In-reader aggregation: summaries computed inside the C++ reader,
 # byte-identical to the scanBam/coverage equivalents
 fs  <- fragment_sizes(bam, threads = 4)   # paired-end fragment-size distribution
 mq  <- mapq_dist(bam, threads = 4)        # mapping-quality distribution
@@ -147,7 +147,7 @@ bam_coverage_bigwig(bam, "coverage.bw", threads = 4)  # single-pass BAM -> bigWi
 
 ## Output modes & compatibility
 
-BamScale fits where `Rsamtools` and `GenomicAlignments` already fit,
+BamScaleR fits where `Rsamtools` and `GenomicAlignments` already fit,
 adding a within-file threading axis on top:
 
 - **Field extraction** via
@@ -165,16 +165,16 @@ adding a within-file threading axis on top:
 
 ## Parallelism model
 
-BamScale parallelizes on two axes — across files via `BPPARAM` workers,
+BamScaleR parallelizes on two axes — across files via `BPPARAM` workers,
 and within each file via OpenMP `threads`. Approximate effective
 concurrency:
 
     min(length(files), bpnworkers(BPPARAM)) * threads
 
-With `auto_threads = TRUE`, BamScale keeps per-file thread counts high
+With `auto_threads = TRUE`, BamScaleR keeps per-file thread counts high
 when possible — reducing the number of concurrently active file workers
 before it shrinks per-file threads. Within-file threading is the key
-difference from the baseline model, and the reason BamScale removes the
+difference from the baseline model, and the reason BamScaleR removes the
 read bottleneck when there are fewer files than cores.
 
 ## Sequence/quality: `compatible` vs `compact`
@@ -218,9 +218,9 @@ decoded <- decode_seqqual_compact(sq_compact)
 ## Reproducing the benchmarks
 
 Benchmark drivers and reporting assets ship under
-[inst/benchmarks/](https://cparsania.github.io/BamScale/inst/benchmarks/)
+[inst/benchmarks/](https://cparsania.github.io/BamScaleR/inst/benchmarks/)
 — see its
-[README](https://cparsania.github.io/BamScale/inst/benchmarks/README.md).
+[README](https://cparsania.github.io/BamScaleR/inst/benchmarks/README.md).
 Reported results come from `run_server_benchmark.R` (read patterns) and
 `run_workflow_benchmark.R` (end-to-end coverage and ATAC QC).
 
@@ -228,10 +228,10 @@ Reported results come from `run_server_benchmark.R` (read patterns) and
 
 ``` r
 
-citation("BamScale")
+citation("BamScaleR")
 ```
 
-If BamScale contributes to a performance claim, please also cite
+If BamScaleR contributes to a performance claim, please also cite
 `ompBAM`.
 
 ## Contributing
@@ -242,7 +242,7 @@ opening a PR:
 
 ``` bash
 R CMD build .
-R CMD check --as-cran BamScale_*.tar.gz
+R CMD check --as-cran BamScaleR_*.tar.gz
 Rscript -e "BiocCheck::BiocCheck('.')"
 ```
 
@@ -251,8 +251,8 @@ Rscript -e "BiocCheck::BiocCheck('.')"
 - User questions: [Bioconductor support
   site](https://support.bioconductor.org)
 - Bugs & feature requests: [GitHub
-  issues](https://github.com/cparsania/BamScale/issues)
+  issues](https://github.com/cparsania/BamScaleR/issues)
 
 ## License
 
-MIT — see [`LICENSE`](https://cparsania.github.io/BamScale/LICENSE).
+MIT — see [`LICENSE`](https://cparsania.github.io/BamScaleR/LICENSE).

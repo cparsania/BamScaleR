@@ -42,7 +42,7 @@ bam_count(
 
 - auto_threads:
 
-  Logical; when `TRUE` and `BPPARAM` has multiple workers, BamScale
+  Logical; when `TRUE` and `BPPARAM` has multiple workers, BamScaleR
   adaptively avoids oversubscription by preserving higher per-file
   OpenMP thread counts when possible and reducing the number of
   concurrently active file workers before shrinking per-file threads.
@@ -59,10 +59,10 @@ For one file: a `data.frame` with columns `seqname`, `seqlength`,
 ## Details
 
 Parallelism behavior matches
-[`bam_read()`](https://cparsania.github.io/BamScale/reference/bam_read.md):
+[`bam_read()`](https://cparsania.github.io/BamScaleR/reference/bam_read.md):
 `BPPARAM` distributes work across BAM files, while `threads` controls
 OpenMP work within each file. If `auto_threads = TRUE` and `BPPARAM` has
-multiple workers, BamScale first limits the number of concurrently
+multiple workers, BamScaleR first limits the number of concurrently
 active workers to preserve the requested per-file thread count within
 the detected core budget, then caps per-file OpenMP threads only if a
 single file would still oversubscribe the machine.

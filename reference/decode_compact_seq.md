@@ -1,4 +1,4 @@
-# Decode compact BamScale sequence output
+# Decode compact BamScaleR sequence output
 
 Decodes `seq` values returned by
 `bam_read(..., seqqual_mode = "compact")` back to ordinary character
@@ -14,7 +14,7 @@ decode_compact_seq(seq, qwidth)
 
 - seq:
 
-  A list (or list-column) of `raw` vectors produced by compact BamScale
+  A list (or list-column) of `raw` vectors produced by compact BamScaleR
   sequence extraction.
 
 - qwidth:
@@ -28,9 +28,9 @@ A character vector containing decoded sequence strings.
 
 ## See also
 
-[`decode_compact_qual()`](https://cparsania.github.io/BamScale/reference/decode_compact_qual.md),
-[`decode_seqqual_compact()`](https://cparsania.github.io/BamScale/reference/decode_seqqual_compact.md),
-[`bam_read()`](https://cparsania.github.io/BamScale/reference/bam_read.md)
+[`decode_compact_qual()`](https://cparsania.github.io/BamScaleR/reference/decode_compact_qual.md),
+[`decode_seqqual_compact()`](https://cparsania.github.io/BamScaleR/reference/decode_seqqual_compact.md),
+[`bam_read()`](https://cparsania.github.io/BamScaleR/reference/bam_read.md)
 
 ## Examples
 

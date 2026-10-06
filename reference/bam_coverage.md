@@ -74,6 +74,22 @@ does.
 
 ## See also
 
-[`fragment_sizes()`](https://cparsania.github.io/BamScale/reference/fragment_sizes.md),
-[`mapq_dist()`](https://cparsania.github.io/BamScale/reference/mapq_dist.md),
-[`bam_read()`](https://cparsania.github.io/BamScale/reference/bam_read.md).
+[`fragment_sizes()`](https://cparsania.github.io/BamScaleR/reference/fragment_sizes.md),
+[`mapq_dist()`](https://cparsania.github.io/BamScaleR/reference/mapq_dist.md),
+[`bam_read()`](https://cparsania.github.io/BamScaleR/reference/bam_read.md).
+
+## Examples
+
+``` r
+bam <- ompBAM::example_BAM("Unsorted")
+
+# Per-base coverage as an RleList, with no alignments materialised in R
+cov <- bam_coverage(bam, threads = 2)
+cov[1]
+#> RleList of length 1
+#> $`1`
+#> integer-Rle of length 248956422 with 3132 runs
+#>   Lengths:  630211      19       4       4 ...      26     123      26 1857649
+#>   Values :       0       1       2       3 ...       1       2       1       0
+#> 
+```

@@ -107,7 +107,7 @@ bam_read(
 
 - auto_threads:
 
-  Logical; when `TRUE` and `BPPARAM` has multiple workers, BamScale
+  Logical; when `TRUE` and `BPPARAM` has multiple workers, BamScaleR
   adaptively avoids oversubscription by preserving higher per-file
   OpenMP thread counts when possible and reducing the number of
   concurrently active file workers before shrinking per-file threads.
@@ -149,7 +149,7 @@ Parallelism model:
 - Effective total concurrency is approximately
   `min(length(file), BiocParallel::bpnworkers(BPPARAM)) * threads`.
 
-- If `auto_threads = TRUE` and `BPPARAM` has multiple workers, BamScale
+- If `auto_threads = TRUE` and `BPPARAM` has multiple workers, BamScaleR
   first limits the number of concurrently active workers to preserve the
   requested per-file thread count within the detected core budget, then
   caps per-file OpenMP threads only if a single file would still
@@ -183,10 +183,10 @@ Compatibility notes:
   contains BAM-packed nucleotide bytes and `qual` contains raw Phred
   bytes. Compact output is intended for users who want to defer or avoid
   full string-materialization costs; use
-  [`decode_compact_seq()`](https://cparsania.github.io/BamScale/reference/decode_compact_seq.md),
-  [`decode_compact_qual()`](https://cparsania.github.io/BamScale/reference/decode_compact_qual.md),
+  [`decode_compact_seq()`](https://cparsania.github.io/BamScaleR/reference/decode_compact_seq.md),
+  [`decode_compact_qual()`](https://cparsania.github.io/BamScaleR/reference/decode_compact_qual.md),
   or
-  [`decode_seqqual_compact()`](https://cparsania.github.io/BamScale/reference/decode_seqqual_compact.md)
+  [`decode_seqqual_compact()`](https://cparsania.github.io/BamScaleR/reference/decode_seqqual_compact.md)
   to decode compact output back to standard string form when needed.
 
 - `"GAlignments"` and `"GAlignmentPairs"` output exclude unmapped

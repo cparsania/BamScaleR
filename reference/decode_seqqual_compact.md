@@ -1,7 +1,7 @@
-# Decode compact `seq` and `qual` columns in BamScale output
+# Decode compact `seq` and `qual` columns in BamScaleR output
 
 Convenience wrapper for converting a compact
-[`bam_read()`](https://cparsania.github.io/BamScale/reference/bam_read.md)
+[`bam_read()`](https://cparsania.github.io/BamScaleR/reference/bam_read.md)
 result back to ordinary sequence and quality strings.
 
 ## Usage
@@ -21,7 +21,7 @@ decode_seqqual_compact(
 
   A `data.frame`,
   [`S4Vectors::DataFrame`](https://rdrr.io/pkg/S4Vectors/man/DataFrame-class.html),
-  or list-like object containing compact BamScale `seq` and/or `qual`
+  or list-like object containing compact BamScaleR `seq` and/or `qual`
   columns.
 
 - seq_col:
@@ -43,9 +43,9 @@ character vectors. The input class is preserved.
 
 ## See also
 
-[`decode_compact_seq()`](https://cparsania.github.io/BamScale/reference/decode_compact_seq.md),
-[`decode_compact_qual()`](https://cparsania.github.io/BamScale/reference/decode_compact_qual.md),
-[`bam_read()`](https://cparsania.github.io/BamScale/reference/bam_read.md)
+[`decode_compact_seq()`](https://cparsania.github.io/BamScaleR/reference/decode_compact_seq.md),
+[`decode_compact_qual()`](https://cparsania.github.io/BamScaleR/reference/decode_compact_qual.md),
+[`bam_read()`](https://cparsania.github.io/BamScaleR/reference/bam_read.md)
 
 ## Examples
 

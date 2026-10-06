@@ -3,6 +3,6 @@
 ### Articles
 
 - [Getting started with
-  BamScale](https://cparsania.github.io/BamScale/articles/BamScale-intro.md):
-- [Benchmarking BamScale: reader throughput and end-to-end workflow
-  impact](https://cparsania.github.io/BamScale/articles/benchmark-results.md):
+  BamScaleR](https://cparsania.github.io/BamScaleR/articles/BamScaleR-intro.md):
+- [Benchmarking BamScaleR: reader throughput and end-to-end workflow
+  impact](https://cparsania.github.io/BamScaleR/articles/benchmark-results.md):

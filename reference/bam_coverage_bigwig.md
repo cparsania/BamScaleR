@@ -1,7 +1,7 @@
 # Write per-base coverage to a bigWig, computed in C++
 
 Computes per-base coverage (identical to
-[`bam_coverage()`](https://cparsania.github.io/BamScale/reference/bam_coverage.md))
+[`bam_coverage()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage.md))
 and writes it directly to a bigWig file entirely in C++ via the bundled
 libBigWig, without ever materialising the coverage as an R object. This
 is the fast path for generating coverage tracks from large BAMs: the
@@ -101,5 +101,17 @@ to `2^24`.
 
 ## See also
 
-[`bam_coverage()`](https://cparsania.github.io/BamScale/reference/bam_coverage.md)
+[`bam_coverage()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage.md)
 for the in-memory `RleList`.
+
+## Examples
+
+``` r
+bam <- ompBAM::example_BAM("Unsorted")
+
+# Single pass from BAM to a finished bigWig track
+out <- tempfile(fileext = ".bw")
+bam_coverage_bigwig(bam, out, threads = 2)
+file.exists(out)
+#> [1] TRUE
+```

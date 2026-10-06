@@ -59,7 +59,19 @@ multiple input files, a named list of such data.frames.
 
 ## See also
 
-[`fragment_sizes()`](https://cparsania.github.io/BamScale/reference/fragment_sizes.md)
+[`fragment_sizes()`](https://cparsania.github.io/BamScaleR/reference/fragment_sizes.md)
 for the fragment-size distribution,
-[`bam_count()`](https://cparsania.github.io/BamScale/reference/bam_count.md)
+[`bam_count()`](https://cparsania.github.io/BamScaleR/reference/bam_count.md)
 for per-chromosome counts.
+
+## Examples
+
+``` r
+bam <- ompBAM::example_BAM("Unsorted")
+
+# Mapping-quality distribution computed inside the reader
+mq <- mapq_dist(bam, threads = 2)
+head(mq)
+#>   mapq count
+#> 1  255 10000
+```
