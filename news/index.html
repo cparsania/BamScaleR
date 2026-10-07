@@ -47,6 +47,71 @@
 <li>The option <code>BamScale.ga_fastpath</code> is now <code>BamScaleR.ga_fastpath</code>.</li>
 <li>BamScale was accepted into Bioconductor devel on 4 May 2026 and was never part of a numbered Bioconductor release, so no deprecation cycle applies. BamScaleR is submitted as its renamed continuation and version numbering restarts at 0.99.0, as required for a new submission. The entries below document this package’s history under its former name.</li>
 </ul></div>
+<div class="section level3">
+<h3 id="earlier-history-as-bamscale-0-99-0">Earlier history (as BamScale)<a class="anchor" aria-label="anchor" href="#earlier-history-as-bamscale-0-99-0"></a></h3>
+<p>The entries below document this package’s development under its former name, <strong>BamScale</strong>, before the rename described above. Those version numbers belong to the former name’s series: BamScale was accepted into Bioconductor devel on 4 May 2026 and never shipped in a numbered release, so version numbering restarts at 0.99.0 under the new name. The code described below is carried forward into BamScaleR unchanged.</p>
+<div class="section level4">
+<h4 id="bamscale-0-99-0">BamScale 0.99.14<a class="anchor" aria-label="anchor" href="#bamscale-0-99-0"></a></h4>
+<div class="section level5">
+<h5 id="new-features-0-99-0">New features<a class="anchor" aria-label="anchor" href="#new-features-0-99-0"></a></h5>
+<ul><li>Four new exported functions compute common BAM summaries entirely inside the multithreaded C++ reader (per-thread accumulators folded in the OpenMP region; only the compact result crosses into R – no per-read R objects are ever materialised), each verified byte-identical to its standard Bioconductor equivalent:
+<ul><li>
+<code><a href="../reference/fragment_sizes.html">fragment_sizes()</a></code>: paired-end fragment-size (insert-size) distribution; identical to <code>table(abs(scanBam(isize)))</code>. <code>drop_mate_unmapped = TRUE</code> (default) replicates <code>scanBam</code>’s <code>isize = NA</code> rule for mate-unmapped reads.</li>
+<li>
+<code><a href="../reference/mapq_dist.html">mapq_dist()</a></code>: mapping-quality distribution; identical to <code>table(scanBam(mapq))</code> (MAPQ 255 reported as 255, where scanBam uses <code>NA</code>).</li>
+<li>
+<code><a href="../reference/bam_coverage.html">bam_coverage()</a></code>: per-base coverage as a <code>SimpleRleList</code>; <code><a href="https://rdrr.io/r/base/identical.html" class="external-link">identical()</a></code> to <code>GenomicAlignments::coverage(readGAlignments(...))</code>, including the CIGAR conventions (<code>M/=/X/D</code> cover, <code>N</code> gaps, <code>drop.D.ranges = FALSE</code>) and the readGAlignments record filter (only unmapped reads dropped).</li>
+<li>
+<code><a href="../reference/bam_coverage_bigwig.html">bam_coverage_bigwig()</a></code>: single-pass BAM -&gt; coverage bigWig written natively via the bundled libBigWig – no R-side coverage object, no <code><a href="https://rdrr.io/pkg/rtracklayer/man/BigWigFile.html" class="external-link">rtracklayer::export.bw</a></code> round-trip. Data and zoom blocks are compressed across the OpenMP threads (<code>parallel = TRUE</code>, default); the parallel output is bit-for-bit identical to the serial writer. A <code>compress_level</code> argument exposes the zlib deflate level, and <code>verbose = TRUE</code> prints a per-phase timing breakdown.</li>
+</ul></li>
+<li>
+<code>bam_read(as = "GAlignments")</code> now uses a dedicated fast path that assembles the <code>GAlignments</code> slots in C++: seqnames/strand accumulated as run-length pairs inside the parallel region, the cigar column materialised through a CHARSXP cache that exploits CIGAR-string redundancy, and qname decoded only when actually requested. Output is <code><a href="https://rdrr.io/r/base/identical.html" class="external-link">identical()</a></code> to <code><a href="https://rdrr.io/pkg/GenomicAlignments/man/readGAlignments.html" class="external-link">GenomicAlignments::readGAlignments()</a></code> (verified at 226M-read scale) and to the previous construction path. <code>options(BamScale.ga_fastpath = FALSE)</code> restores the old path.</li>
+<li>Vendored libBigWig 0.4.8 (MIT, Devon Ryan) under <code>src/libBigWig/</code> (built with <code>-DNOCURL</code>, local files only). Local modifications, each commented in <code>bwWrite.c</code>: a tunable zlib deflate level, deferred parallel block compression, and zoom-level construction from in-memory coverage runs instead of re-reading the just-written data section.</li>
+</ul></div>
+<div class="section level5">
+<h5 id="performance-0-99-0">Performance<a class="anchor" aria-label="anchor" href="#performance-0-99-0"></a></h5>
+<ul><li>Fixed a quadratic reallocation pattern in the reader’s batch merge: per-batch exact-capacity <code>reserve()</code> calls copied all accumulated data on every batch. Buffers now grow geometrically. This affects every read path – e.g. on a 229M-read BAM at 48 threads, <code>as = "GAlignments"</code> dropped from ~300 s to ~56 s, and plain data-frame reads improved 2.8-4.4x.</li>
+<li>CIGAR strings are formatted with an allocation-free digit writer instead of per-op <code>std::to_string</code>.</li>
+<li>Representative large-file results (229M-read ATAC BAM, 48 threads, warm cache): <code><a href="../reference/bam_coverage.html">bam_coverage()</a></code> 7.2x vs <code>coverage(readGAlignments())</code>; <code><a href="../reference/bam_coverage_bigwig.html">bam_coverage_bigwig()</a></code> 2.6x vs megadepth at equal compression; <code><a href="../reference/fragment_sizes.html">fragment_sizes()</a></code> 5.4x vs <code>scanBam</code> + <code><a href="https://rdrr.io/r/base/table.html" class="external-link">table()</a></code>; <code>as = "GAlignments"</code> 4.8x vs <code>readGAlignments()</code> (and faster even single-threaded).</li>
+</ul></div>
+<div class="section level5">
+<h5 id="bug-fixes-0-99-0">Bug fixes<a class="anchor" aria-label="anchor" href="#bug-fixes-0-99-0"></a></h5>
+<ul><li>
+<code><a href="../reference/bam_coverage_bigwig.html">bam_coverage_bigwig()</a></code> now works on Windows: the output stream is opened in binary mode (<code>"w+b"</code>; text mode corrupted the bigWig), and zoom levels are always built from the in-memory coverage runs instead of re-reading the just-written stream (Windows’ C runtime is strict about write-to-read transitions on update streams; the in-memory path is byte-identical to the re-read path, verified at 226M-read scale). Vendored libBigWig diagnostics now go through <code>REprintf()</code>, clearing the compiled-code check NOTE.</li>
+<li>Removed a long-standing <code>^src/Makevars$</code> entry from <code>.Rbuildignore</code> (dating to the pkgdown setup): built tarballs – including the Bioconductor builds – shipped without <code>src/Makevars</code> and therefore compiled WITHOUT OpenMP (and without the explicit <code>-lz</code>), silently running single-threaded when installed from a tarball. In-place <code>R CMD INSTALL .</code> was unaffected, which is why local installs always threaded. Tarball builds now carry the full build configuration (OpenMP, zlib, <code>-DNOCURL</code>, and the bundled libBigWig objects).</li>
+</ul></div>
+<div class="section level5">
+<h5 id="benchmarks-0-99-0">Benchmarks<a class="anchor" aria-label="anchor" href="#benchmarks-0-99-0"></a></h5>
+<ul><li>
+<code>run_workflow_benchmark.R</code> gains first-class arms for the four new functions (<code>--include-fastcov/-bigwig/-fragsize/-mapq</code>), each behind an <code><a href="https://rdrr.io/r/base/identical.html" class="external-link">identical()</a></code> correctness gate, with an optional megadepth context arm (<code>--megadepth-bin</code>).</li>
+<li>
+<code>run_server_benchmark.R</code>: BiocParallel PSOCK clusters are now started and their namespaces pre-loaded outside the timed region in all multi-file arms (previously cluster spin-up was charged to every iteration, diluting comparator ratios at high worker counts); added <code>--include-single</code> so single and multi scenarios can run in separate stages.</li>
+<li>New reproducible manuscript-benchmark tooling: <code>select_encode_atac.R</code> (ENCODE portal selection -&gt; accession/md5 manifest), manifest-driven <code>download_atac_data.R</code> with md5 verification, <code>samtools_reference.sh</code>, <code>merge_runs.R</code>, and the staged <code>run_manuscript_final.sh</code> orchestrator.</li>
+</ul></div>
+<div class="section level5">
+<h5 id="tests-0-99-0">Tests<a class="anchor" aria-label="anchor" href="#tests-0-99-0"></a></h5>
+<ul><li>New testthat gates: byte-identity of <code><a href="../reference/fragment_sizes.html">fragment_sizes()</a></code> / <code><a href="../reference/mapq_dist.html">mapq_dist()</a></code> / <code><a href="../reference/bam_coverage.html">bam_coverage()</a></code> against their Rsamtools/GenomicAlignments equivalents; <code><a href="../reference/bam_coverage_bigwig.html">bam_coverage_bigwig()</a></code> value-identity after re-import plus bit-for-bit parallel-vs-serial output; six <code>GAlignments</code> fast-path identity gates (threads 1/4, mcols order, <code>use.names</code>, flag/mapq filters, fast == slow, <code>gctorture</code>).</li>
+</ul></div>
+</div>
+<div class="section level4">
+<h4 id="bamscale-0-99-0-1">BamScale 0.99.13<a class="anchor" aria-label="anchor" href="#bamscale-0-99-0-1"></a></h4>
+<div class="section level5">
+<h5 id="new-features-0-99-0-1">New features<a class="anchor" aria-label="anchor" href="#new-features-0-99-0-1"></a></h5>
+<ul><li>On the compatible read path, <code>seq</code> and <code>qual</code> are now built directly in C as <code>DNAStringSet</code> / <code>PhredQuality</code> objects from the packed BAM byte buffer (via the IRanges/XVector C-callable constructors), avoiding a character round-trip. Output remains byte-identical to <code><a href="https://rdrr.io/pkg/Rsamtools/man/scanBam.html" class="external-link">Rsamtools::scanBam</a></code>.</li>
+<li>Added an end-to-end workflow benchmark harness under <code>inst/benchmarks/</code> (coverage → bigWig and ATAC fragment-size QC) and a self-contained <code>benchmark-results</code> vignette.</li>
+</ul></div>
+<div class="section level5">
+<h5 id="bug-fixes-0-99-0-1">Bug fixes<a class="anchor" aria-label="anchor" href="#bug-fixes-0-99-0-1"></a></h5>
+<ul><li>
+<code>GAlignments</code> output now carries the BAM-header sequence lengths in its <code>Seqinfo</code>. Previously the seqlengths were <code>NA</code>, so <code>coverage()</code> extended each seqlevel only to its maximum end and <code>export.bw()</code> wrote truncated chromosome sizes, diverging from <code><a href="https://rdrr.io/pkg/GenomicAlignments/man/readGAlignments.html" class="external-link">GenomicAlignments::readGAlignments</a></code>.</li>
+<li>Force-load the C-callable providers (<code>S4Vectors</code>, <code>IRanges</code>, <code>XVector</code>, <code>Biostrings</code>) and <code>GenomicAlignments</code> in <code>.onLoad</code>, so the compatible seq/qual and <code>GAlignments</code> paths resolve their constructors and classes on fresh <code>SnowParam</code> SOCK workers.</li>
+</ul></div>
+<div class="section level5">
+<h5 id="documentation-0-99-0">Documentation<a class="anchor" aria-label="anchor" href="#documentation-0-99-0"></a></h5>
+<ul><li>Refreshed the README with the latest benchmark results (read-pattern and end-to-end workflow speedups) and Bioconductor installation instructions.</li>
+</ul></div>
+</div>
+</div>
 </div>
   </main><aside class="col-md-3"><nav id="toc" aria-label="Table of contents"><h2>On this page</h2>
     </nav></aside></div>
