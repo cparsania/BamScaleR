@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">BamScaleR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.99.0</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.99.1</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -38,6 +38,17 @@
       <small>Source: <a href="https://github.com/cparsania/BamScaleR/blob/main/NEWS.md" class="external-link"><code>NEWS.md</code></a></small>
     </div>
 
+    <div class="section level2">
+<h2 class="pkg-version" data-toc-text="0.99.1" id="bamscaler-0991">BamScaleR 0.99.1<a class="anchor" aria-label="anchor" href="#bamscaler-0991"></a></h2>
+<div class="section level3">
+<h3 id="bug-fixes-0-99-1">Bug fixes<a class="anchor" aria-label="anchor" href="#bug-fixes-0-99-1"></a></h3>
+<ul><li>
+<p><code><a href="../reference/bam_coverage.html">bam_coverage()</a></code> and <code><a href="../reference/bam_coverage_bigwig.html">bam_coverage_bigwig()</a></code> no longer allocate memory proportional to the genome declared in the BAM header. The coverage core previously built a dense per-base difference array for every header sequence before reading a single alignment, so a BAM carrying few alignments still cost several GB whenever its header declared a whole genome – 12.6 GB for a 1.4 MB file with a GRCh38 header – and the collapse pass then walked every base of every contig. Coverage is now accumulated as per-thread interval endpoints and swept per contig, so memory and time scale with the alignments actually present rather than with the reference. Contigs without alignments cost nothing and still emit the correct full-length zero run.</p>
+<p>Measured on a 2.5 GB ATAC-seq BAM (195 contigs): peak RSS 14.2 GB -&gt; 2.5 GB and 71.0 s -&gt; 14.9 s at 24 threads. On a 1.4 MB BAM with a whole-genome header: 12.6 GB -&gt; 0.55 GB (R’s baseline) and 17.6 s -&gt; 7.8 s. Output is unchanged and remains <code><a href="https://rdrr.io/r/base/identical.html" class="external-link">identical()</a></code> to <code>coverage(readGAlignments())</code> at every thread count.</p>
+<p>Removing the shared difference array also removes the atomic updates from the read loop, which is where most of the speedup comes from.</p>
+</li>
+</ul></div>
+</div>
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.99.0" id="bamscaler-0990">BamScaleR 0.99.0<a class="anchor" aria-label="anchor" href="#bamscaler-0990"></a></h2>
 <div class="section level3">

@@ -1,5 +1,34 @@
 # Changelog
 
+## BamScaleR 0.99.1
+
+### Bug fixes
+
+- [`bam_coverage()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage.md)
+  and
+  [`bam_coverage_bigwig()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage_bigwig.md)
+  no longer allocate memory proportional to the genome declared in the
+  BAM header. The coverage core previously built a dense per-base
+  difference array for every header sequence before reading a single
+  alignment, so a BAM carrying few alignments still cost several GB
+  whenever its header declared a whole genome – 12.6 GB for a 1.4 MB
+  file with a GRCh38 header – and the collapse pass then walked every
+  base of every contig. Coverage is now accumulated as per-thread
+  interval endpoints and swept per contig, so memory and time scale with
+  the alignments actually present rather than with the reference.
+  Contigs without alignments cost nothing and still emit the correct
+  full-length zero run.
+
+  Measured on a 2.5 GB ATAC-seq BAM (195 contigs): peak RSS 14.2 GB -\>
+  2.5 GB and 71.0 s -\> 14.9 s at 24 threads. On a 1.4 MB BAM with a
+  whole-genome header: 12.6 GB -\> 0.55 GB (R’s baseline) and 17.6 s -\>
+  7.8 s. Output is unchanged and remains
+  [`identical()`](https://rdrr.io/r/base/identical.html) to
+  `coverage(readGAlignments())` at every thread count.
+
+  Removing the shared difference array also removes the atomic updates
+  from the read loop, which is where most of the speedup comes from.
+
 ## BamScaleR 0.99.0
 
 ### Package rename
