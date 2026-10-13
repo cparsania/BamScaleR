@@ -28,7 +28,7 @@
 
     <a class="navbar-brand me-2" href="index.html">BamScaleR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.99.1</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.99.2</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -75,8 +75,7 @@
 <p><strong>BamScaleR</strong> is a multithreaded BAM reader for R, built on the <a href="https://bioconductor.org/packages/ompBAM" class="external-link"><code>ompBAM</code></a> OpenMP engine. It returns the <em>exact</em> Bioconductor objects you already use — verified <strong>byte-identical</strong> to <code>Rsamtools</code> and <code>GenomicAlignments</code> — but decodes each file across many cores, taking the read step off the critical path in alignment-centric workflows.</p>
 <ul>
 <li>
-<strong>2.5–4× faster</strong> single-file reads than <code>scanBam</code> / <code>readGAlignments</code>
-</li>
+<strong>1.9–2.5× faster</strong> single-file reads than <code>scanBam</code> / <code>readGAlignments</code>, and never slower — it matches or beats them even on a single thread</li>
 <li>
 <strong>Drop-in</strong>: same objects, same <code>ScanBamParam</code> filtering, same <code>BiocParallel</code> model</li>
 <li>
@@ -86,10 +85,13 @@
 <li>
 <strong>Verified correct</strong>: output is byte-identical to the standard tools at every thread count</li>
 </ul>
+<blockquote>
+<p><strong>A note on the name.</strong> This package was formerly called <strong>BamScale</strong> and was renamed to BamScaleR to avoid confusion with <a href="https://github.com/ncbi/BAMscale" class="external-link">BAMscale</a> (Pongor <em>et al.</em>, <em>Epigenetics &amp; Chromatin</em> 2020), an unrelated NCBI command-line tool that generates normalised coverage tracks and quantifies peaks. The R suffix marks this as the R/Bioconductor implementation; the two projects are not related.</p>
+</blockquote>
 <div class="section level2">
 <h2 id="benchmarks">Benchmarks<a class="anchor" aria-label="anchor" href="#benchmarks"></a>
 </h2>
-<p>Intel Xeon Gold 6252 (96 cores), warm page cache, median of 5 iterations. Full methodology, figures, and fair-comparison details are in the <a href="https://cparsania.github.io/BamScaleR/articles/benchmark-results.html">benchmark article</a>.</p>
+<p>Measured on a deeply sequenced public ENCODE ATAC-seq BAM (ENCFF191LNL, 151,057,932 alignments, 6.8 GB). Intel Xeon Gold 6252 (96 logical cores), warm page cache, median of 5 iterations. Full methodology, figures, and fair-comparison details are in the <a href="https://cparsania.github.io/BamScaleR/articles/benchmark-results.html">benchmark article</a>.</p>
 <p><strong>Single-file read throughput</strong> — best BamScaleR configuration vs the single-threaded standard reader:</p>
 <table class="table">
 <colgroup>
@@ -112,27 +114,27 @@
 <tr>
 <td>Core alignment fields</td>
 <td><code><a href="https://rdrr.io/pkg/Rsamtools/man/scanBam.html" class="external-link">Rsamtools::scanBam</a></code></td>
-<td align="right">15.4 s</td>
-<td align="right">6.3 s</td>
-<td align="center">48</td>
-<td align="center"><strong>2.5×</strong></td>
+<td align="right">263.3 s</td>
+<td align="right">136.0 s</td>
+<td align="center">36</td>
+<td align="center"><strong>1.94×</strong></td>
 </tr>
 <tr>
 <td>
 <code>GAlignments</code> object</td>
 <td><code><a href="https://rdrr.io/pkg/GenomicAlignments/man/readGAlignments.html" class="external-link">GenomicAlignments::readGAlignments</a></code></td>
-<td align="right">10.6 s</td>
-<td align="right">2.6 s</td>
-<td align="center">48</td>
-<td align="center"><strong>4.0×</strong></td>
+<td align="right">290.1 s</td>
+<td align="right">115.9 s</td>
+<td align="center">72</td>
+<td align="center"><strong>2.50×</strong></td>
 </tr>
 <tr>
 <td>Sequence + base quality</td>
 <td><code><a href="https://rdrr.io/pkg/Rsamtools/man/scanBam.html" class="external-link">Rsamtools::scanBam</a></code></td>
-<td align="right">21.6 s</td>
-<td align="right">7.0 s</td>
-<td align="center">48</td>
-<td align="center"><strong>3.1×</strong></td>
+<td align="right">409.8 s</td>
+<td align="right">179.3 s</td>
+<td align="center">24</td>
+<td align="center"><strong>2.29×</strong></td>
 </tr>
 </tbody>
 </table>
@@ -146,23 +148,73 @@
 <tbody>
 <tr>
 <td>ATAC fragment-size QC</td>
-<td align="center">92%</td>
-<td align="center"><strong>4.1×</strong></td>
+<td align="center">94%</td>
+<td align="center"><strong>4.39×</strong></td>
 </tr>
 <tr>
 <td>Coverage → <code>RleList</code>
 </td>
-<td align="center">76%</td>
-<td align="center"><strong>3.3×</strong></td>
+<td align="center">72%</td>
+<td align="center"><strong>2.49×</strong></td>
 </tr>
 <tr>
 <td>Coverage → bigWig</td>
-<td align="center">22%</td>
-<td align="center"><strong>1.2×</strong></td>
+<td align="center">41%</td>
+<td align="center"><strong>1.52×</strong></td>
 </tr>
 </tbody>
 </table>
-<p>Every result is measured against output verified equal to the standard tool: the ATAC fragment-size table is byte-identical to <code>ATACseqQC::fragSizeDist</code> across 49.8M reads, and the coverage <code>RleList</code> is <code><a href="https://rdrr.io/r/base/identical.html" class="external-link">identical()</a></code> to <code><a href="https://rdrr.io/pkg/IRanges/man/coverage-methods.html" class="external-link">GenomicAlignments::coverage()</a></code> at every thread count.</p>
+<p>Every result is measured against output verified equal to the standard tool: the ATAC fragment-size table is byte-identical to <code>ATACseqQC::fragSizeDist</code> across all 151,057,932 alignments, and the coverage <code>RleList</code> is <code><a href="https://rdrr.io/r/base/identical.html" class="external-link">identical()</a></code> to <code><a href="https://rdrr.io/pkg/IRanges/man/coverage-methods.html" class="external-link">GenomicAlignments::coverage()</a></code> at every thread count.</p>
+<p><strong>In-reader aggregation</strong> — the reduction is folded into the multithreaded decoder, so no per-read R objects are built at all:</p>
+<table class="table">
+<colgroup>
+<col width="15%">
+<col width="15%">
+<col width="21%">
+<col width="21%">
+<col width="26%">
+</colgroup>
+<thead><tr>
+<th>Endpoint</th>
+<th>Standard Bioconductor route</th>
+<th align="right">Standard</th>
+<th align="right">BamScaleR</th>
+<th align="center">Speedup</th>
+</tr></thead>
+<tbody>
+<tr>
+<td>Fragment sizes</td>
+<td><code>table(abs(scanBam(isize)))</code></td>
+<td align="right">129.8 s</td>
+<td align="right">20.9 s</td>
+<td align="center"><strong>6.21×</strong></td>
+</tr>
+<tr>
+<td>MAPQ distribution</td>
+<td><code>table(scanBam(mapq))</code></td>
+<td align="right">130.7 s</td>
+<td align="right">23.9 s</td>
+<td align="center"><strong>5.47×</strong></td>
+</tr>
+<tr>
+<td>Coverage <code>RleList</code>
+</td>
+<td><code>coverage(readGAlignments())</code></td>
+<td align="right">234.2 s</td>
+<td align="right">33.2 s</td>
+<td align="center"><strong>7.06×</strong></td>
+</tr>
+<tr>
+<td>BAM → bigWig</td>
+<td><code>export.bw(coverage(readGAlignments()))</code></td>
+<td align="right">410.2 s</td>
+<td align="right">69.0 s</td>
+<td align="center"><strong>5.95×</strong></td>
+</tr>
+</tbody>
+</table>
+<p><code><a href="reference/bam_coverage_bigwig.html">bam_coverage_bigwig()</a></code> also outperforms <a href="https://github.com/ChristopherWilks/megadepth" class="external-link"><code>megadepth</code></a>, a dedicated C++ coverage engine, by <strong>3.45×</strong> at matched core counts (69.0 s vs 238.0 s at 72 threads) while leaving the track on disk and control in the R session.</p>
+<p>Memory scales with the alignments present, not with the genome the BAM header declares: <code><a href="reference/bam_coverage.html">bam_coverage()</a></code> on a 1.4 MB BAM carrying a whole-genome header needs <strong>0.55 GB</strong>, not the 12.6 GB a header-sized allocation would require.</p>
 <blockquote>
 <p>BamScaleR is not a raw-decode replacement for command-line <code>samtools</code>. Its job is fast, object-faithful decoding <em>inside</em> R — putting the cores a single-threaded reader leaves idle to work, and handing back the precise Bioconductor objects your analysis depends on.</p>
 </blockquote>
@@ -171,14 +223,14 @@
 <h2 id="installation">Installation<a class="anchor" aria-label="anchor" href="#installation"></a>
 </h2>
 <p>Requires R with a C++17 toolchain and an OpenMP-capable compiler; <code>ompBAM</code> and the other dependencies are pulled in automatically.</p>
-<p>BamScaleR is on <a href="https://bioconductor.org/packages/3.24/bioc/html/BamScaleR.html" class="external-link">Bioconductor</a> (currently in the <code>devel</code> branch):</p>
+<p>Install from GitHub:</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
+<code class="sourceCode R"><span><span class="fu">remotes</span><span class="fu">::</span><span class="fu">install_github</span><span class="op">(</span><span class="st">"cparsania/BamScaleR"</span><span class="op">)</span></span></code></pre></div>
+<p>BamScaleR is under Bioconductor review (<a href="https://github.com/Bioconductor/BiocContributions/issues/226" class="external-link">BiocContributions#226</a>). Once it is accepted it will install with:</p>
+<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw">if</span> <span class="op">(</span><span class="op">!</span><span class="fu"><a href="https://rdrr.io/r/base/ns-load.html" class="external-link">requireNamespace</a></span><span class="op">(</span><span class="st">"BiocManager"</span>, quietly <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/utils/install.packages.html" class="external-link">install.packages</a></span><span class="op">(</span><span class="st">"BiocManager"</span><span class="op">)</span></span>
 <span><span class="fu">BiocManager</span><span class="fu">::</span><span class="fu"><a href="https://bioconductor.github.io/BiocManager/reference/install.html" class="external-link">install</a></span><span class="op">(</span>version <span class="op">=</span> <span class="st">"devel"</span><span class="op">)</span></span>
 <span><span class="fu">BiocManager</span><span class="fu">::</span><span class="fu"><a href="https://bioconductor.github.io/BiocManager/reference/install.html" class="external-link">install</a></span><span class="op">(</span><span class="st">"BamScaleR"</span><span class="op">)</span></span></code></pre></div>
-<p>Or install the development version from GitHub:</p>
-<div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="fu">remotes</span><span class="fu">::</span><span class="fu">install_github</span><span class="op">(</span><span class="st">"cparsania/BamScaleR"</span><span class="op">)</span></span></code></pre></div>
 </div>
 <div class="section level2">
 <h2 id="quick-start">Quick start<a class="anchor" aria-label="anchor" href="#quick-start"></a>
@@ -279,12 +331,14 @@
 <code>seqqual_mode = "compact"</code> is optimization-oriented and not intended for strict cross-package output equivalence.</li>
 <li>
 <code>GAlignments</code> / <code>GAlignmentPairs</code> outputs exclude unmapped records by design.</li>
+<li>Intra-file thread scaling is strongly sublinear and saturates well below the full core count; the benefit is putting otherwise-idle cores to work on a single large file, not near-linear speedup.</li>
+<li>Object-free command-line decoders such as <code>samtools</code> reach several-fold higher raw throughput, because they never construct the Bioconductor objects an analysis needs.</li>
 </ul>
 </div>
 <div class="section level2">
 <h2 id="reproducing-the-benchmarks">Reproducing the benchmarks<a class="anchor" aria-label="anchor" href="#reproducing-the-benchmarks"></a>
 </h2>
-<p>Benchmark drivers and reporting assets ship under <a href="inst/benchmarks/">inst/benchmarks/</a> — see its <a href="inst/benchmarks/README.html">README</a>. Reported results come from <code>run_server_benchmark.R</code> (read patterns) and <code>run_workflow_benchmark.R</code> (end-to-end coverage and ATAC QC).</p>
+<p>Benchmark drivers and reporting assets ship under <a href="inst/benchmarks/">inst/benchmarks/</a> — see its <a href="inst/benchmarks/README.html">README</a>. Reported results come from <code>run_server_benchmark.R</code> (read patterns) and <code>run_workflow_benchmark.R</code> (end-to-end coverage, ATAC QC and the in-reader aggregation endpoints). The numbers above are from the run of 2026-10-08 on the 25-file ENCODE corpus, which is reconstructible from the MD5-verified manifest via <code>download_atac_data.R</code>.</p>
 </div>
 <div class="section level2">
 <h2 id="citation">Citation<a class="anchor" aria-label="anchor" href="#citation"></a>

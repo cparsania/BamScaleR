@@ -18,24 +18,25 @@ fragment-size QC — with BamScaleR output verified **byte-identical** to
 the standard tools.
 
 The numbers below are a concise summary of a representative benchmark
-run (Intel Xeon Gold 6252, 96 cores; warm page cache; median of 5
-iterations). The benchmark harness that produces them is in
-`inst/benchmarks/` (`run_server_benchmark.R`,
+run (a deeply sequenced public ENCODE ATAC-seq BAM, ENCFF191LNL,
+151,057,932 alignments; Intel Xeon Gold 6252, 96 logical cores; warm
+page cache; median of 5 iterations). The benchmark harness that produces
+them is in `inst/benchmarks/` (`run_server_benchmark.R`,
 `run_workflow_benchmark.R`); see the last section to reproduce the full
 results.
 
 ## Read throughput on a single large BAM
 
-On a single large BAM, BamScaleR reads **2.5–4x faster** than the
+On a single large BAM, BamScaleR reads **1.9–2.5x faster** than the
 standard reader across three representative access patterns, because it
 spreads the BGZF decode across cores and assembles the output objects in
 native code:
 
 | Workload | Reads | Standard (s) | BamScaleR (s) | Threads | Speedup |
 |:---|:---|---:|---:|---:|:---|
-| Core fields | qname/flag/rname/pos/mapq/cigar | 15.4 | 6.3 | 48 | 2.45x |
-| GAlignments | -\> GAlignments object | 10.6 | 2.6 | 48 | 4.03x |
-| Sequence + quality | seq + base quality | 21.6 | 7.0 | 48 | 3.09x |
+| Core fields | qname/flag/rname/pos/mapq/cigar | 263.3 | 136.0 | 36 | 1.94x |
+| GAlignments | -\> GAlignments object | 290.1 | 115.9 | 72 | 2.50x |
+| Sequence + quality | seq + base quality | 409.8 | 179.3 | 24 | 2.29x |
 
 Single-file read throughput: best BamScaleR configuration vs the
 single-threaded standard reader (median of 5 iterations). {.table}
@@ -61,12 +62,12 @@ law):
 
 | Endpoint                  | Layer    | Read fraction | Speedup |
 |:--------------------------|:---------|:--------------|:--------|
-| ATAC fragment-size QC     | workflow | 92%           | 4.14x   |
-| GAlignments (read)        | read     | 100%          | 4.03x   |
-| Coverage -\> RleList      | workflow | 76%           | 3.29x   |
-| Sequence + quality (read) | read     | 100%          | 3.09x   |
-| Core fields (read)        | read     | 100%          | 2.45x   |
-| Coverage -\> bigWig       | workflow | 22%           | 1.24x   |
+| ATAC fragment-size QC     | workflow | 94%           | 4.39x   |
+| GAlignments (read)        | read     | 100%          | 2.50x   |
+| Coverage -\> RleList      | workflow | 72%           | 2.49x   |
+| Sequence + quality (read) | read     | 100%          | 2.29x   |
+| Core fields (read)        | read     | 100%          | 1.94x   |
+| Coverage -\> bigWig       | workflow | 41%           | 1.52x   |
 
 End-to-end speedup by workload endpoint. Read-pattern rows are
 single-file read throughput; workflow rows are end-to-end. Read fraction
@@ -75,13 +76,13 @@ is the share of the standard pipeline spent reading. {.table}
 ![](benchmark-results_files/figure-html/spectrum-plot-1.png)
 
 - **ATAC fragment-size QC** is nearly pure read, so BamScaleR’s read
-  speedup carries through almost intact: **4.14x** end-to-end.
+  speedup carries through almost intact: **4.39x** end-to-end.
 - **Coverage -\> bigWig** is dominated by the shared, single-threaded
   [`rtracklayer::export.bw`](https://rdrr.io/pkg/rtracklayer/man/BigWigFile.html)
   step (identical work on both arms), so the end-to-end gain is bounded
-  at **1.24x** even though the read phase itself is 6.6x faster.
+  at **1.52x** even though the read phase itself is 5.9x faster.
   Stopping at the in-memory coverage `RleList` – what many analyses
-  consume next – recovers a **3.29x** gain.
+  consume next – recovers a **2.49x** gain.
   ([`bam_coverage()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage.md)
   and
   [`bam_coverage_bigwig()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage_bigwig.md)
@@ -93,7 +94,7 @@ is the share of the standard pipeline spent reading. {.table}
 A multithreaded reader can occupy cores a single-threaded one cannot. At
 **matched core counts** (both arms given the same number of cores) the
 two readers are approximately at parity for multi-file processing
-(coverage ~1.13x, ATAC ~0.99x): the single-threaded reader already
+(coverage ~1.20x, ATAC ~0.97x): the single-threaded reader already
 saturates a machine by parallelising *across* files, so BamScaleR’s
 multi-file advantage comes specifically from also threading *within* a
 file – which pays off when there are fewer files than cores.
@@ -130,8 +131,8 @@ fragment-size table is
 [`identical()`](https://rdrr.io/r/base/identical.html) to
 [`Rsamtools::scanBam`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html)
 and byte-identical (maximum absolute difference 0) to
-`ATACseqQC::fragSizeDist` over 49.8 million reads. This is what makes
-BamScaleR a genuine drop-in rather than an approximation.
+`ATACseqQC::fragSizeDist` over all 151,057,932 alignments. This is what
+makes BamScaleR a genuine drop-in rather than an approximation.
 
 ## Try it
 
@@ -230,7 +231,7 @@ correctness metadata, from which the summary figures above are derived.
     ## [1] stats     graphics  grDevices utils     datasets  methods   base     
     ## 
     ## other attached packages:
-    ## [1] BamScaleR_0.99.1 ggplot2_4.0.3    BiocStyle_2.40.0
+    ## [1] BamScaleR_0.99.2 ggplot2_4.0.3    BiocStyle_2.40.0
     ## 
     ## loaded via a namespace (and not attached):
     ##  [1] SummarizedExperiment_1.42.0 gtable_0.3.6               

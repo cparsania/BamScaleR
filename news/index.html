@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">BamScaleR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.99.1</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.99.2</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -38,6 +38,17 @@
       <small>Source: <a href="https://github.com/cparsania/BamScaleR/blob/main/NEWS.md" class="external-link"><code>NEWS.md</code></a></small>
     </div>
 
+    <div class="section level2">
+<h2 class="pkg-version" data-toc-text="0.99.2" id="bamscaler-0992">BamScaleR 0.99.2<a class="anchor" aria-label="anchor" href="#bamscaler-0992"></a></h2>
+<div class="section level3">
+<h3 id="documentation-0-99-2">Documentation<a class="anchor" aria-label="anchor" href="#documentation-0-99-2"></a></h3>
+<ul><li>README and the benchmark vignette now report the canonical benchmark run of 2026-10-08, measured on the full 25-file public ENCODE ATAC-seq corpus (single-file target ENCFF191LNL, 151,057,932 alignments). The previous tables came from a much smaller early run and overstated some results: the <code>GAlignments</code> read speedup was shown as 4.03x against a measured 2.50x, and coverage to an in-memory <code>RleList</code> as 3.29x against 2.49x. Read-pattern speedups are 1.94-2.50x, ATAC fragment-size QC 4.39x end-to-end, and coverage to bigWig 1.52x.</li>
+<li>Added the measured in-reader aggregation results to the README (5.47-7.06x over the standard Bioconductor routes; 3.45x over megadepth at matched core counts) and the memory characteristic of <code><a href="../reference/bam_coverage.html">bam_coverage()</a></code>.</li>
+<li>Documented the rename from BamScale and the distinction from the unrelated NCBI command-line tool BAMscale.</li>
+<li>Installation instructions no longer advertise a Bioconductor install that does not yet work; BamScaleR is still under review.</li>
+<li>Recorded two further limitations: sublinear intra-file thread scaling, and that object-free command-line decoders reach higher raw throughput.</li>
+</ul></div>
+</div>
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.99.1" id="bamscaler-0991">BamScaleR 0.99.1<a class="anchor" aria-label="anchor" href="#bamscaler-0991"></a></h2>
 <div class="section level3">

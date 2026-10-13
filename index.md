@@ -26,7 +26,9 @@ returns the *exact* Bioconductor objects you already use — verified
 each file across many cores, taking the read step off the critical path
 in alignment-centric workflows.
 
-- **2.5–4× faster** single-file reads than `scanBam` / `readGAlignments`
+- **1.9–2.5× faster** single-file reads than `scanBam` /
+  `readGAlignments`, and never slower — it matches or beats them even on
+  a single thread
 - **Drop-in**: same objects, same `ScanBamParam` filtering, same
   `BiocParallel` model
 - **In-reader aggregation**:
@@ -42,11 +44,20 @@ in alignment-centric workflows.
 - **Verified correct**: output is byte-identical to the standard tools
   at every thread count
 
+> **A note on the name.** This package was formerly called **BamScale**
+> and was renamed to BamScaleR to avoid confusion with
+> [BAMscale](https://github.com/ncbi/BAMscale) (Pongor *et al.*,
+> *Epigenetics & Chromatin* 2020), an unrelated NCBI command-line tool
+> that generates normalised coverage tracks and quantifies peaks. The R
+> suffix marks this as the R/Bioconductor implementation; the two
+> projects are not related.
+
 ## Benchmarks
 
-Intel Xeon Gold 6252 (96 cores), warm page cache, median of 5
-iterations. Full methodology, figures, and fair-comparison details are
-in the [benchmark
+Measured on a deeply sequenced public ENCODE ATAC-seq BAM (ENCFF191LNL,
+151,057,932 alignments, 6.8 GB). Intel Xeon Gold 6252 (96 logical
+cores), warm page cache, median of 5 iterations. Full methodology,
+figures, and fair-comparison details are in the [benchmark
 article](https://cparsania.github.io/BamScaleR/articles/benchmark-results.html).
 
 **Single-file read throughput** — best BamScaleR configuration vs the
@@ -54,9 +65,9 @@ single-threaded standard reader:
 
 | Read pattern | Comparator | Standard | BamScaleR | Threads | Speedup |
 |----|----|---:|---:|:--:|:--:|
-| Core alignment fields | [`Rsamtools::scanBam`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html) | 15.4 s | 6.3 s | 48 | **2.5×** |
-| `GAlignments` object | [`GenomicAlignments::readGAlignments`](https://rdrr.io/pkg/GenomicAlignments/man/readGAlignments.html) | 10.6 s | 2.6 s | 48 | **4.0×** |
-| Sequence + base quality | [`Rsamtools::scanBam`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html) | 21.6 s | 7.0 s | 48 | **3.1×** |
+| Core alignment fields | [`Rsamtools::scanBam`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html) | 263.3 s | 136.0 s | 36 | **1.94×** |
+| `GAlignments` object | [`GenomicAlignments::readGAlignments`](https://rdrr.io/pkg/GenomicAlignments/man/readGAlignments.html) | 290.1 s | 115.9 s | 72 | **2.50×** |
+| Sequence + base quality | [`Rsamtools::scanBam`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html) | 409.8 s | 179.3 s | 24 | **2.29×** |
 
 **End-to-end workflows** — BamScaleR swapped in for the read step only,
 every other step identical on both sides. The gain tracks how read-bound
@@ -64,16 +75,40 @@ the workflow is (Amdahl’s law):
 
 | Workflow              | Read fraction | End-to-end speedup |
 |-----------------------|:-------------:|:------------------:|
-| ATAC fragment-size QC |      92%      |      **4.1×**      |
-| Coverage → `RleList`  |      76%      |      **3.3×**      |
-| Coverage → bigWig     |      22%      |      **1.2×**      |
+| ATAC fragment-size QC |      94%      |     **4.39×**      |
+| Coverage → `RleList`  |      72%      |     **2.49×**      |
+| Coverage → bigWig     |      41%      |     **1.52×**      |
 
 Every result is measured against output verified equal to the standard
 tool: the ATAC fragment-size table is byte-identical to
-`ATACseqQC::fragSizeDist` across 49.8M reads, and the coverage `RleList`
-is [`identical()`](https://rdrr.io/r/base/identical.html) to
+`ATACseqQC::fragSizeDist` across all 151,057,932 alignments, and the
+coverage `RleList` is
+[`identical()`](https://rdrr.io/r/base/identical.html) to
 [`GenomicAlignments::coverage()`](https://rdrr.io/pkg/IRanges/man/coverage-methods.html)
 at every thread count.
+
+**In-reader aggregation** — the reduction is folded into the
+multithreaded decoder, so no per-read R objects are built at all:
+
+| Endpoint | Standard Bioconductor route | Standard | BamScaleR | Speedup |
+|----|----|---:|---:|:--:|
+| Fragment sizes | `table(abs(scanBam(isize)))` | 129.8 s | 20.9 s | **6.21×** |
+| MAPQ distribution | `table(scanBam(mapq))` | 130.7 s | 23.9 s | **5.47×** |
+| Coverage `RleList` | `coverage(readGAlignments())` | 234.2 s | 33.2 s | **7.06×** |
+| BAM → bigWig | `export.bw(coverage(readGAlignments()))` | 410.2 s | 69.0 s | **5.95×** |
+
+[`bam_coverage_bigwig()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage_bigwig.md)
+also outperforms
+[`megadepth`](https://github.com/ChristopherWilks/megadepth), a
+dedicated C++ coverage engine, by **3.45×** at matched core counts (69.0
+s vs 238.0 s at 72 threads) while leaving the track on disk and control
+in the R session.
+
+Memory scales with the alignments present, not with the genome the BAM
+header declares:
+[`bam_coverage()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage.md)
+on a 1.4 MB BAM carrying a whole-genome header needs **0.55 GB**, not
+the 12.6 GB a header-sized allocation would require.
 
 > BamScaleR is not a raw-decode replacement for command-line `samtools`.
 > Its job is fast, object-faithful decoding *inside* R — putting the
@@ -85,22 +120,22 @@ at every thread count.
 Requires R with a C++17 toolchain and an OpenMP-capable compiler;
 `ompBAM` and the other dependencies are pulled in automatically.
 
-BamScaleR is on
-[Bioconductor](https://bioconductor.org/packages/3.24/bioc/html/BamScaleR.html)
-(currently in the `devel` branch):
+Install from GitHub:
+
+``` r
+
+remotes::install_github("cparsania/BamScaleR")
+```
+
+BamScaleR is under Bioconductor review
+([BiocContributions#226](https://github.com/Bioconductor/BiocContributions/issues/226)).
+Once it is accepted it will install with:
 
 ``` r
 
 if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
 BiocManager::install(version = "devel")
 BiocManager::install("BamScaleR")
-```
-
-Or install the development version from GitHub:
-
-``` r
-
-remotes::install_github("cparsania/BamScaleR")
 ```
 
 ## Quick start
@@ -214,6 +249,12 @@ decoded <- decode_seqqual_compact(sq_compact)
   for strict cross-package output equivalence.
 - `GAlignments` / `GAlignmentPairs` outputs exclude unmapped records by
   design.
+- Intra-file thread scaling is strongly sublinear and saturates well
+  below the full core count; the benefit is putting otherwise-idle cores
+  to work on a single large file, not near-linear speedup.
+- Object-free command-line decoders such as `samtools` reach
+  several-fold higher raw throughput, because they never construct the
+  Bioconductor objects an analysis needs.
 
 ## Reproducing the benchmarks
 
@@ -222,7 +263,10 @@ Benchmark drivers and reporting assets ship under
 — see its
 [README](https://cparsania.github.io/BamScaleR/inst/benchmarks/README.md).
 Reported results come from `run_server_benchmark.R` (read patterns) and
-`run_workflow_benchmark.R` (end-to-end coverage and ATAC QC).
+`run_workflow_benchmark.R` (end-to-end coverage, ATAC QC and the
+in-reader aggregation endpoints). The numbers above are from the run of
+2026-10-08 on the 25-file ENCODE corpus, which is reconstructible from
+the MD5-verified manifest via `download_atac_data.R`.
 
 ## Citation
 

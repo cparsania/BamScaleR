@@ -1,5 +1,29 @@
 # Changelog
 
+## BamScaleR 0.99.2
+
+### Documentation
+
+- README and the benchmark vignette now report the canonical benchmark
+  run of 2026-10-08, measured on the full 25-file public ENCODE ATAC-seq
+  corpus (single-file target ENCFF191LNL, 151,057,932 alignments). The
+  previous tables came from a much smaller early run and overstated some
+  results: the `GAlignments` read speedup was shown as 4.03x against a
+  measured 2.50x, and coverage to an in-memory `RleList` as 3.29x
+  against 2.49x. Read-pattern speedups are 1.94-2.50x, ATAC
+  fragment-size QC 4.39x end-to-end, and coverage to bigWig 1.52x.
+- Added the measured in-reader aggregation results to the README
+  (5.47-7.06x over the standard Bioconductor routes; 3.45x over
+  megadepth at matched core counts) and the memory characteristic of
+  [`bam_coverage()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage.md).
+- Documented the rename from BamScale and the distinction from the
+  unrelated NCBI command-line tool BAMscale.
+- Installation instructions no longer advertise a Bioconductor install
+  that does not yet work; BamScaleR is still under review.
+- Recorded two further limitations: sublinear intra-file thread scaling,
+  and that object-free command-line decoders reach higher raw
+  throughput.
+
 ## BamScaleR 0.99.1
 
 ### Bug fixes
