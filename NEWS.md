@@ -1,3 +1,11 @@
+# BamScaleR 0.99.4
+
+## Bug fixes
+
+* A test of `bam_coverage_bigwig()` failed on Windows: it built an output
+  path ending in a separator with `file.path(x, "")`, which drops the
+  trailing separator on Windows. The package code is unchanged.
+
 # BamScaleR 0.99.3
 
 Changes in response to the Bioconductor review (BiocContributions#226).

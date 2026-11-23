@@ -1381,7 +1381,9 @@ test_that("relative input paths are made absolute for every input type", {
 test_that("bam_coverage_bigwig rejects a directory and a link to another outfile", {
   bam <- ompBAM::example_BAM("Unsorted")
   expect_error(bam_coverage_bigwig(bam, tempdir(), BPPARAM = NULL), "directory")
-  not_yet <- file.path(tempfile("tracks"), "")  # ends in "/", does not exist
+  # Ends in "/" and does not exist. (Not file.path(x, ""), which drops the
+  # trailing separator on Windows.)
+  not_yet <- paste0(tempfile("tracks"), "/")
   expect_error(bam_coverage_bigwig(bam, not_yet, BPPARAM = NULL), "directory")
   expect_false(file.exists(sub("/$", "", not_yet)))
   skip_on_os("windows")
