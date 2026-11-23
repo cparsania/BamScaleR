@@ -38,7 +38,8 @@ bam_coverage_bigwig(
 
 - outfile:
 
-  Output bigWig path(s); must have the same length as `file`.
+  Output bigWig path(s); must have the same length as `file`, with no
+  path repeated.
 
 - param:
 
@@ -46,7 +47,8 @@ bam_coverage_bigwig(
   [Rsamtools::ScanBamParam](https://rdrr.io/pkg/Rsamtools/man/ScanBamParam-class.html)
   (or a compatible list). Only its `flag` and `mapqFilter` are honoured,
   applied per read in C++. With the default `NULL` the filter matches
-  `readGAlignments()` (drop only unmapped reads).
+  `readGAlignments()` (drop only unmapped reads). `which` (region)
+  restriction is not applied; setting it gives a warning.
 
 - threads:
 

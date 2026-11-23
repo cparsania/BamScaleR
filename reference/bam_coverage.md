@@ -35,8 +35,8 @@ bam_coverage(
   [Rsamtools::ScanBamParam](https://rdrr.io/pkg/Rsamtools/man/ScanBamParam-class.html)
   (or a compatible list). Only its `flag` and `mapqFilter` are honoured,
   applied per read in C++. With the default `NULL` the filter matches
-  `readGAlignments()` (drop only unmapped reads). Note that `which`
-  (region) restriction is not applied.
+  `readGAlignments()` (drop only unmapped reads). `which` (region)
+  restriction is not applied; setting it gives a warning.
 
 - threads:
 

@@ -36,7 +36,8 @@ fragment_sizes(
   Optional
   [Rsamtools::ScanBamParam](https://rdrr.io/pkg/Rsamtools/man/ScanBamParam-class.html)
   (or a compatible list). Only its `flag` and `mapqFilter` are honoured,
-  applied per read in C++ – e.g.
+  applied per read in C++ (other settings that would change the result,
+  such as `which`, give a warning) – e.g.
   `Rsamtools::ScanBamParam(flag = Rsamtools::scanBamFlag( isSecondaryAlignment = FALSE, isUnmappedQuery = FALSE, isNotPassingQualityControls = FALSE))`
   to reproduce the standard ATAC fragment-size filter.
 
@@ -62,8 +63,8 @@ fragment_sizes(
 
 - drop_mate_unmapped:
 
-  Logical; if `TRUE` (default), reads whose mate is unmapped (SAM flag
-  `0x8`) are excluded – matching
+  Logical; if `TRUE` (default), reads that are unmapped or whose mate is
+  unmapped (SAM flags `0x4`, `0x8`) are excluded – matching
   [`Rsamtools::scanBam`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html),
   which reports their `isize` as `NA` (no defined template length), so
   that `table(abs(isize))` drops them. Set `FALSE` to tally `abs(TLEN)`

@@ -20,8 +20,12 @@ decode_compact_qual(qual)
 ## Value
 
 A character vector containing decoded quality strings. Entries with
-all-missing quality bytes are returned as `"*"`, matching BamScaleR's
-compatibility mode.
+all-missing quality bytes (value 255) are returned as `"*"`, the SAM
+notation for a missing quality. (The compatible mode of
+[`bam_read()`](https://cparsania.github.io/BamScaleR/reference/bam_read.md)
+instead returns
+[`Rsamtools::scanBam()`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html)'s
+`PhredQuality` for such reads.)
 
 ## See also
 

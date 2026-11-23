@@ -1,5 +1,151 @@
 # Changelog
 
+## BamScaleR 0.99.3
+
+Changes in response to the Bioconductor review (BiocContributions#226).
+
+### Bug fixes
+
+- macOS: BamScaleR could fail to load with
+  `symbol not found in flat namespace '___kmpc_critical'`. CRAN’s R for
+  macOS does not enable OpenMP itself; when it is enabled locally with
+  `-Xclang -fopenmp` (for example in `~/.R/Makevars`), OpenMP code is
+  generated but the OpenMP runtime (`libomp`) is not linked. A new
+  `configure` script now tests candidate compile/link flags by building
+  and [`dyn.load()`](https://rdrr.io/r/base/dynload.html)ing a small
+  library that uses the same OpenMP constructs as the package (including
+  dynamic loop schedules), and falls back to a build without OpenMP (one
+  thread per file, otherwise fully functional) when none works. With
+  CRAN’s R the runtime linked is always the `libomp` that ships with R;
+  an OpenMP install from mac.r-project.org or Homebrew supplies the
+  header. If R’s runtime is too old for the compiler (Apple clang 17
+  needs LLVM 19 or later), the installation log says so. If the user’s
+  own flags switch OpenMP on for every package, so that a build without
+  OpenMP is impossible, `configure` stops with a message saying so.
+  Linux and Windows builds are unchanged. Flags can be set by hand with
+  both `BAMSCALER_OPENMP_CXXFLAGS` and `BAMSCALER_OPENMP_LIBS`.
+- Multi-file calls no longer modify the supplied `BPPARAM`. Previously
+  the worker count could be reduced in place with `bpworkers<-`; because
+  `BiocParallelParam` objects have reference semantics this changed the
+  caller’s object for later use and, for an already-started cluster,
+  left its reported worker count out of step with the running workers.
+  The files are passed to `bplapply()` directly, as before, except that
+  a `SnowParam` that is not running is started with only the workers
+  needed (no more than the files, or than an `auto_threads` plan allows)
+  and stopped again afterwards; that under an `auto_threads` cap a
+  `MulticoreParam` that is not running is replaced by a copy with fewer
+  workers; and that under a cap the files of a running cluster, or of
+  another kind of `BPPARAM`, are grouped into that many tasks (an error
+  then names the file, and `bptry()` returns per-group results).
+- Linux: once OpenMP threads had been used in the R session (by
+  BamScaleR or another package, such as data.table), a multi-file call
+  with `MulticoreParam` and `threads > 1` could hang forever, because
+  GCC’s OpenMP runtime cannot start threads in a forked process once its
+  parent has used them. BamScaleR now releases the runtime’s idle
+  threads before each `fork()` (with libgomp 9 or later, looked up at
+  run time), so forked workers use the requested threads. This applies
+  to every `fork()` in the session and may discard other libraries’
+  OpenMP thread-private data. With an older libgomp, a worker forked
+  after BamScaleR has used threads reads on one thread, and one forked
+  after another package used OpenMP threads can still hang; use
+  `SnowParam(type = "SOCK")` there.
+- `param$which` kept only records whose start position lay in a range,
+  so alignments that start before a range and extend into it were
+  missing. It now keeps every alignment that overlaps a range, as
+  `Rsamtools` does (each record once, under the first range it
+  overlaps). As in `Rsamtools`, a zero-width range now selects nothing
+  and a range on a sequence that is not in the BAM header is an error
+  (it silently matched nothing). An empty `which` now means no
+  restriction instead of an error; ranges with missing values, or with
+  an end less than start - 1, are an error; repeated range labels are
+  made unique (so a range given twice gets an empty second batch).
+- [`bam_coverage_bigwig()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage_bigwig.md):
+  - compressed blocks on every available core whatever `threads` was; it
+    now uses `threads`;
+  - a failure while finishing the file (for example a full disk) left a
+    truncated bigWig and returned normally; it is now an error and the
+    partial file is removed;
+  - opened the output in text mode on Windows (the vendored libBigWig
+    ignored the binary mode it was given), which would corrupt the file;
+  - with `parallel = FALSE`, a write failure while writing the data (for
+    example a full disk) overran the vendored libBigWig’s write buffer,
+    which could crash R; it is now an error and the partial file is
+    removed;
+  - crashed R for an `outfile` in a directory that does not exist or
+    cannot be written. That, an `outfile` that is a directory (or ends
+    in a path separator) or cannot be overwritten, repeated `outfile`
+    paths (also through symbolic links) and an `outfile` that is one of
+    the input BAMs are now errors before any work. Output paths are made
+    absolute (and `~` expanded) before they reach the workers.
+- `bam_read(as = "GAlignmentPairs")` paired the i-th first mate with the
+  i-th last mate of each read name, which mismatched mates when a read
+  had secondary or supplementary alignments. Mates are now matched by
+  [`GenomicAlignments::makeGAlignmentPairs()`](https://rdrr.io/pkg/GenomicAlignments/man/findMateAlignment.html)
+  (read name, mate position, strand, first/last, proper-pair and
+  secondary flags); without `which` this gives the same pairs as
+  `readGAlignmentPairs()`, ordered by first-mate position. When nothing
+  can be paired, an empty `GAlignmentPairs` is returned instead of an
+  error.
+- [`mapq_dist()`](https://cparsania.github.io/BamScaleR/reference/mapq_dist.md)
+  no longer counts unmapped reads (at MAPQ 0), and
+  [`fragment_sizes()`](https://cparsania.github.io/BamScaleR/reference/fragment_sizes.md)
+  with `drop_mate_unmapped = TRUE` now also drops unmapped reads, as
+  `scanBam()` reports `NA` for both.
+- Settings of `ScanBamParam` that are not supported (`tagFilter`,
+  `simpleCigar`, `reverseComplement`, and `which` in the summary
+  functions), and unknown entries of a list-form `param`, now give a
+  warning instead of being ignored silently. A list-form `param` now
+  applies `flag` (a `scanBamFlag()` value, which was silently dropped)
+  and matches entry names exactly.
+- `use.names = TRUE` now names `GAlignments` output even when `what`
+  does not include `"qname"`, and `with.which_label = TRUE` adds a
+  column only when `which` is set. Input paths starting with `~` are now
+  expanded, and relative input paths (also of `BamFile` and
+  `BamFileList` inputs) are made absolute, so `SnowParam` workers
+  started in another directory read the intended files.
+
+### Improvements
+
+- The `GAlignments` fast path no longer calls the non-exported
+  `S4Vectors:::new2()`. The object is assembled by slot assignment on a
+  valid prototype, and the C++ reader counts the records whose validity
+  it cannot guarantee by construction (a CIGAR with an op code above 8
+  or a zero-length op, and an alignment outside its sequence); if there
+  are any, `validObject()` is run, so an invalid object is never
+  returned and out-of-bound alignments warn as with `readGAlignments()`.
+- Requesting `threads` \> 1 on a build without OpenMP now warns once per
+  session instead of silently running single-threaded, and
+  `auto_threads` then keeps all `BPPARAM` workers.
+
+### Documentation
+
+- The main vignette has a new section with evaluated examples of
+  [`fragment_sizes()`](https://cparsania.github.io/BamScaleR/reference/fragment_sizes.md),
+  [`mapq_dist()`](https://cparsania.github.io/BamScaleR/reference/mapq_dist.md),
+  [`bam_coverage()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage.md)
+  and
+  [`bam_coverage_bigwig()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage_bigwig.md),
+  each compared with the standard Bioconductor route; an installation
+  section covering OpenMP on macOS; and a section on what BamScaleR adds
+  to ompBAM.
+- The benchmark vignette now computes every table and number from CSV
+  files shipped in `inst/extdata/` (canonical run of 2026-10-08), with
+  their provenance documented in `inst/scripts/make_benchmark_extdata.R`
+  and a table of the ENCODE accessions used. Two thread-scaling
+  statements that had been carried over from an earlier, smaller run
+  were corrected.
+- Expanded the DESCRIPTION `Description` field.
+
+### Dependencies
+
+- `parallel` is now declared in `Imports`; `testthat` (\>= 3.1.7) and
+  `withr` (used by the test setup) in `Suggests`.
+- Removed unused `Suggests`: `chipseqDBData`, `dplyr`, `ExperimentHub`,
+  `readr`, `tibble`, `tidyr`. Packages needed only by the benchmark
+  scripts in `inst/benchmarks/` (including `chipseqDBData` and
+  `ATACseqQC`) are listed in `inst/benchmarks/README.md` and are
+  intentionally not declared in DESCRIPTION.
+
 ## BamScaleR 0.99.2
 
 ### Documentation

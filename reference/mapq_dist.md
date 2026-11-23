@@ -34,8 +34,12 @@ mapq_dist(
   Optional
   [Rsamtools::ScanBamParam](https://rdrr.io/pkg/Rsamtools/man/ScanBamParam-class.html)
   (or a compatible list). Only its `flag` and `mapqFilter` are honoured,
-  applied per read in C++. Note that a non-zero `mapqFilter` removes
-  reads below that MAPQ from the distribution.
+  applied per read in C++ (other settings that would change the result,
+  such as `which`, give a warning). Note that a non-zero `mapqFilter`
+  removes reads below that MAPQ from the distribution. Unmapped reads
+  (SAM flag `0x4`) have no mapping quality –
+  [`Rsamtools::scanBam()`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html)
+  reports `NA` for them – and are never counted.
 
 - threads:
 

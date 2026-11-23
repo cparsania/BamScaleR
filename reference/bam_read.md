@@ -46,6 +46,8 @@ bam_read(
   [`Rsamtools::ScanBamParam`](https://rdrr.io/pkg/Rsamtools/man/ScanBamParam-class.html)
   (or a compatible list for lightweight use). The following fields are
   honored: `mapqFilter`, `flag`, `which`, `what`, and `tag`.
+  `tagFilter`, `simpleCigar` and `reverseComplement` are not supported;
+  setting them gives a warning and they are ignored.
 
 - what:
 
@@ -80,8 +82,14 @@ bam_read(
   Controls representation of `seq`/`qual` when those fields are
   requested:
 
-  - `"compatible"` (default): return character vectors matching
-    `scanBam`-style expectations,
+  - `"compatible"` (default): return `seq` and `qual` as
+    [`Biostrings::DNAStringSet`](https://rdrr.io/pkg/Biostrings/man/XStringSet-class.html)
+    and
+    [`Biostrings::PhredQuality`](https://rdrr.io/pkg/Biostrings/man/XStringQuality-class.html)
+    objects, identical to those from
+    [`Rsamtools::scanBam()`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html).
+    These are best held in a `DataFrame` (`as = "DataFrame"`); a base
+    `data.frame` can carry them but cannot print them,
 
   - `"compact"`: return lower-level raw list-columns for
     faster/lower-overhead extraction. In compact mode, `seq` is returned
@@ -96,14 +104,21 @@ bam_read(
 - threads:
 
   Requested number of OpenMP threads used for reading/decompression. May
-  be capped when `auto_threads = TRUE`.
+  be capped when `auto_threads = TRUE`. Values above 1 require a build
+  with OpenMP (see the Installation section of
+  [`vignette("BamScaleR-intro")`](https://cparsania.github.io/BamScaleR/articles/BamScaleR-intro.md));
+  without it a warning is issued once per session and each file is read
+  on one thread.
 
 - BPPARAM:
 
   `BiocParallel` parameter used when `file` contains more than one BAM.
   Defaults to
   [`BiocParallel::bpparam()`](https://rdrr.io/pkg/BiocParallel/man/register.html).
-  Set to `NULL` to force serial file processing.
+  Set to `NULL` to force serial file processing. The object is used as
+  supplied and is never modified, so it can be reused afterwards; an
+  already-started cluster stays running with its configured number of
+  workers.
 
 - auto_threads:
 
@@ -115,12 +130,14 @@ bam_read(
 - use.names:
 
   Passed to alignment object conversion. When `TRUE`, read names
-  (`qname`) are used as object names.
+  (`qname`) are used as object names (they are read for this even when
+  `what` does not include `"qname"`).
 
 - with.which_label:
 
   Logical; if `TRUE` and `param` includes `which`, an extra
-  `which_label` column is returned.
+  `which_label` column is returned. It is a character column (or mcol),
+  where `readGAlignments()` returns a factor `Rle`.
 
 - include_unmapped:
 
@@ -136,8 +153,9 @@ one per BAM file.
 ## Details
 
 `bam_read()` is intentionally column-compatible with common BAM fields
-used by Bioconductor workflows and can be used as a fast drop-in reader
-before conversion to downstream classes.
+used by Bioconductor workflows and can be used in place of
+[`Rsamtools::scanBam()`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html)
+for the supported fields and settings; the differences are listed below.
 
 Parallelism model:
 
@@ -153,7 +171,30 @@ Parallelism model:
   first limits the number of concurrently active workers to preserve the
   requested per-file thread count within the detected core budget, then
   caps per-file OpenMP threads only if a single file would still
-  oversubscribe the machine.
+  oversubscribe the machine. `BPPARAM` itself is never changed. A
+  `MulticoreParam` that is not running is replaced by a copy with fewer
+  workers; a `SnowParam` that is not running is started with only the
+  workers needed (also when there are fewer files than workers) and
+  stopped again afterwards. For a running cluster, or another kind of
+  `BPPARAM`, the files are grouped into that many `bplapply()` tasks; an
+  error then stops its whole group, and
+  [`BiocParallel::bptry()`](https://rdrr.io/pkg/BiocParallel/man/bptry.html)
+  returns one result per group rather than per file.
+
+- GCC's OpenMP runtime (the usual one on Linux) cannot start threads in
+  a process created by `fork()` once its parent has used OpenMP threads,
+  and such a forked worker
+  ([`BiocParallel::MulticoreParam`](https://rdrr.io/pkg/BiocParallel/man/MulticoreParam-class.html))
+  would wait forever. BamScaleR therefore releases the runtime's idle
+  threads just before each `fork()` in the session, so forked workers
+  can use `threads` as requested, whichever package used OpenMP first.
+  (This may also discard other libraries' OpenMP thread-private data.)
+  With an OpenMP runtime too old to support this (GCC's libgomp before
+  version 9), a worker forked after BamScaleR has used several threads
+  reads on one thread, and a worker forked after another package used
+  OpenMP threads can still hang; use
+  [`BiocParallel::SnowParam()`](https://rdrr.io/pkg/BiocParallel/man/SnowParam-class.html)
+  (type `"SOCK"`) there.
 
 Compatibility notes:
 
@@ -164,8 +205,18 @@ Compatibility notes:
   unset references are `NA` (not `"*"`). `strand` has levels
   `c("+", "-", "*")`.
 
-- Region filtering via `param$which` is supported as a sequential filter
-  (not index-jump random access).
+- Region filtering via `param$which` is a sequential filter (the whole
+  file is read; the BAM index is not used). As in `Rsamtools`, a record
+  is kept when its alignment overlaps a range. Unlike `Rsamtools`, a
+  record that overlaps several ranges is returned once, labelled with
+  the first of them; records come in file order rather than grouped by
+  range; and unmapped records are not returned when `which` is set. As
+  in `Rsamtools`, a zero-width range selects nothing, and a range on a
+  sequence that is not in the BAM header is an error. Repeated range
+  labels are made unique with
+  [`make.unique()`](https://rdrr.io/r/base/make.unique.html), one batch
+  per range; a range given twice therefore gets an empty second batch,
+  where `scanBam()` repeats the records.
 
 - Flag filtering uses `ScanBamFlag` semantics by converting logical flag
   requirements into required-set and required-unset bit masks.
@@ -191,6 +242,36 @@ Compatibility notes:
 
 - `"GAlignments"` and `"GAlignmentPairs"` output exclude unmapped
   records.
+
+- For plain `as = "GAlignments"` requests (no `which`, tags, `seq` or
+  `qual`), the object is assembled from slots built in C++. Every
+  invariant checked by the `GAlignments` validity method holds by
+  construction, except for two kinds of record that the reader counts: a
+  CIGAR with an op code above 8 or a zero-length op (which the validity
+  method may reject), and an alignment that extends outside its
+  sequence. If either occurs,
+  [`methods::validObject()`](https://rdrr.io/r/methods/validObject.html)
+  is run on the result, so an invalid object is never returned and
+  out-of-bound alignments give the same warning as
+  [`GenomicAlignments::readGAlignments()`](https://rdrr.io/pkg/GenomicAlignments/man/readGAlignments.html).
+  Set `options(BamScaleR.ga_fastpath = FALSE)` to always use the
+  validating `GAlignments` constructor instead.
+
+- For `as = "GAlignmentPairs"`, mates are matched by
+  [`GenomicAlignments::makeGAlignmentPairs()`](https://rdrr.io/pkg/GenomicAlignments/man/findMateAlignment.html),
+  on the read name, each record's position against its mate's
+  `mrnm`/`mpos`, the strand, first/last, proper-pair and secondary
+  flags. Without `which`, the result contains the same pairs as
+  [`GenomicAlignments::readGAlignmentPairs()`](https://rdrr.io/pkg/GenomicAlignments/man/readGAlignments.html),
+  ordered by the position of the first mate (pairs whose first mates
+  start at the same position may come in a different order). With
+  `which`, records are filtered before pairing, so only pairs with both
+  mates in the ranges are returned, each once, whereas
+  `readGAlignmentPairs()` returns every pair with at least one mate in a
+  range. Ambiguous mates are dropped, and `BamFile` read-name options
+  (`qnamePrefixEnd`, `qnameSuffixStart`) are not used. The mates' mcols
+  hold the requested `what` fields and tags that are not alignment
+  slots, as for `as = "GAlignments"`.
 
 - `as = "scanBam"` returns a strict scan-like list-of-lists: without
   `param$which`, it returns one unnamed batch; with `param$which`, it

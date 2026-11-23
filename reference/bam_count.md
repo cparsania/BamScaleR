@@ -2,7 +2,11 @@
 
 `bam_count()` provides a fast chromosome-level count summary, honoring
 key filtering fields from `ScanBamParam` (`mapqFilter`, `flag`, and
-`which`).
+`which`). With `which`, a record is counted once if its alignment
+overlaps any of the ranges
+([`Rsamtools::countBam()`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html)
+counts it once per overlapping range), and unmapped records are not
+counted, so the `*` row is 0.
 
 ## Usage
 

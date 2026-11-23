@@ -8,23 +8,27 @@ rely on `Rsamtools`, `GenomicAlignments`, and `BiocParallel`, but need
 faster BAM parsing without moving to a separate non-Bioconductor
 workflow model.
 
-The package targets three common classes of BAM access:
+The package targets four common classes of BAM access:
 
 - metadata-oriented scans for filtering, fragment summaries, and quality
   control
 - generation of alignment objects for downstream `GenomicAlignments`
   workflows
 - sequence and quality extraction, including an optimized compact mode
+- summaries computed inside the multithreaded reader (fragment-size and
+  mapping-quality distributions, per-base coverage, bigWig tracks), so
+  that no per-read R objects are created at all
 
 The motivation for inclusion in Bioconductor is therefore
 straightforward: `BamScaleR` accelerates a core data-access bottleneck
-while preserving familiar Bioconductor inputs, filtering semantics, and
-output types.
+while preserving familiar Bioconductor inputs and output types.
+
+`BamScaleR` is built on the `ompBAM` C++ library, which supplies
+parallel BAM decompression. The section [BamScaleR and
+ompBAM](#bamscaler-and-ompbam) below explains what each package
+provides.
 
 ## Installation
-
-At present, `BamScaleR` depends on the `ompBAM` engine and is intended
-for use with an OpenMP-capable toolchain.
 
 ``` r
 
@@ -35,6 +39,81 @@ if (!requireNamespace("BiocManager", quietly = TRUE)) {
 BiocManager::install("BamScaleR")
 ```
 
+### Multithreading and OpenMP
+
+`BamScaleR` reads each BAM with several threads (the `threads` argument)
+using OpenMP. OpenMP is optional. Without it, every function works and
+returns the same results, but each BAM is read on a single thread.
+Processing several files in parallel through `BPPARAM` (see below) is
+unaffected. If `threads` greater than 1 is requested on a build without
+OpenMP, `BamScaleR` warns once per session.
+
+- **Linux and Windows.** The standard R toolchains (GCC, and Rtools on
+  Windows) support OpenMP. Nothing extra is needed.
+- **macOS.** Apple’s `clang` can compile OpenMP code, but Apple does not
+  ship the OpenMP header (`omp.h`) or runtime library (`libomp`). CRAN’s
+  R for macOS ships a `libomp` in `R.home("lib")`, but no header. When
+  `BamScaleR` is installed from source, its `configure` script tries
+  several compiler and linker settings. For each one it builds a small
+  OpenMP test library and loads it into R, and it uses the first setting
+  that loads. With CRAN’s R, the runtime that gets linked is always R’s
+  own `libomp`, so only one OpenMP runtime is loaded into the R session.
+  The chosen flags are printed in the installation log. If no setting
+  works, the package is built without OpenMP and the log says why. (If
+  your own compiler flags switch OpenMP on for every package, for
+  example `CPPFLAGS += -Xclang -fopenmp` in `~/.R/Makevars`, a build
+  without OpenMP is not possible; `configure` then stops and says so.)
+
+To enable multithreading on macOS, install the OpenMP files that match
+your Xcode version from <https://mac.r-project.org/openmp/>. Check the
+Apple clang version with `clang --version` in a terminal. For example,
+for Xcode 16.0 to 16.2 (Apple clang 1600):
+
+``` sh
+curl -O https://mac.r-project.org/openmp/openmp-17.0.6-darwin20-Release.tar.gz
+sudo tar fvxz openmp-17.0.6-darwin20-Release.tar.gz -C /
+```
+
+Use `openmp-16.0.4-darwin20-Release.tar.gz` for Xcode 15 (Apple clang
+1500), or `openmp-19.1.5-darwin20-Release.tar.gz` for Xcode 16.3 or
+later (Apple clang 1700). The tarball installs `omp.h` under
+`/usr/local/include` and `libomp.dylib` under `/usr/local/lib`. A
+Homebrew installation (`brew install libomp`) is also detected.
+
+Then reinstall `BamScaleR` from source. A plain
+[`BiocManager::install()`](https://bioconductor.github.io/BiocManager/reference/install.html)
+would skip a package that is already installed, or install the same
+binary again, so ask for a source build explicitly (this needs the Xcode
+Command Line Tools):
+
+``` r
+
+BiocManager::install("BamScaleR", type = "source", force = TRUE)
+```
+
+In a source checkout, rebuild with `R CMD INSTALL --preclean .` or
+`devtools::load_all(recompile = TRUE)`, so that objects compiled without
+OpenMP are not reused.
+
+Apple clang 1700 (Xcode 16.3 and later) needs an OpenMP runtime from
+LLVM 19 or later. If the `libomp` bundled with your R is older,
+`configure` rejects it, the package is built without OpenMP, and the
+installation log explains why.
+
+To bypass the detection, set both flags yourself before installing, for
+example:
+
+``` r
+
+Sys.setenv(
+    BAMSCALER_OPENMP_CXXFLAGS = "-Xclang -fopenmp",
+    BAMSCALER_OPENMP_LIBS = "-lomp"
+)
+BiocManager::install("BamScaleR", type = "source", force = TRUE)
+```
+
+Setting both variables to `""` builds without OpenMP.
+
 ## Basic usage
 
 ``` r
@@ -43,6 +122,9 @@ library(BamScaleR)
 
 bam <- ompBAM::example_BAM("Unsorted")
 ```
+
+The example file shipped with `ompBAM` is a small paired-end RNA-seq BAM
+(10,000 alignments to the human genome, aligned with STAR).
 
 ### Metadata-oriented BAM access
 
@@ -157,42 +239,41 @@ ga
 ### Sequence and quality extraction
 
 For `seq` and `qual`, `BamScaleR` supports both a
-compatibility-preserving mode and an optimized compact mode.
+compatibility-preserving mode and an optimized compact mode. The
+compatible mode (the default) returns the sequences and qualities as
+[`Biostrings::DNAStringSet`](https://rdrr.io/pkg/Biostrings/man/XStringSet-class.html)
+and
+[`Biostrings::PhredQuality`](https://rdrr.io/pkg/Biostrings/man/XStringQuality-class.html)
+objects, identical to those from
+[`Rsamtools::scanBam()`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html).
+A `DataFrame` holds such columns naturally; a base `data.frame` can
+carry them, but cannot print them.
 
 ``` r
 
 seqqual_compatible <- bam_read(
     file = bam,
     what = c("qname", "seq", "qual"),
-    as = "data.frame",
+    as = "DataFrame",
     seqqual_mode = "compatible",
     threads = 2
 )
 
-head(seqqual_compatible)
-#> Warning in format.data.frame(if (omit) x[seq_len(n0), , drop = FALSE] else x, :
-#> corrupt data frame: columns will be truncated or padded with NAs
-#>                                       qname
-#> 1  ST-E00600:137:H77Y3CCXY:1:1101:6837:1309
-#> 2  ST-E00600:137:H77Y3CCXY:1:1101:6837:1309
-#> 3 ST-E00600:137:H77Y3CCXY:1:1101:10450:1309
-#> 4 ST-E00600:137:H77Y3CCXY:1:1101:10450:1309
-#> 5 ST-E00600:137:H77Y3CCXY:1:1101:15077:1309
-#> 6 ST-E00600:137:H77Y3CCXY:1:1101:15077:1309
-#>                                                             seq
-#> 1 <S4 class 'DNAStringSet' [package "Biostrings"] with 5 slots>
-#> 2                                                          <NA>
-#> 3                                                          <NA>
-#> 4                                                          <NA>
-#> 5                                                          <NA>
-#> 6                                                          <NA>
-#>                                                            qual
-#> 1 <S4 class 'PhredQuality' [package "Biostrings"] with 5 slots>
-#> 2                                                          <NA>
-#> 3                                                          <NA>
-#> 4                                                          <NA>
-#> 5                                                          <NA>
-#> 6                                                          <NA>
+seqqual_compatible
+#> DataFrame with 10000 rows and 3 columns
+#>                        qname                     seq                    qual
+#>                  <character>          <DNAStringSet>          <PhredQuality>
+#> 1     ST-E00600:137:H77Y3C.. NGACCGGCGA...CCTGCTCCTT #AA-AAFJFJ...)7777<))--
+#> 2     ST-E00600:137:H77Y3C.. TGCCGGCACA...GCCAGAAAAN -FAAA)-AJF...JJF-AFAAA#
+#> 3     ST-E00600:137:H77Y3C.. NGGAGCTTCG...GATGGAGGAG #AA-AFFJFJ...7<--7---A7
+#> 4     ST-E00600:137:H77Y3C.. TGGGAAGAGC...AGATGGTGAN AJA-FFJJJF...JJF<FFAAA#
+#> 5     ST-E00600:137:H77Y3C.. NGCATCTCTA...ACATTATTCG #AAFFF-FJJ...JJJJ-<<FJJ
+#> ...                      ...                     ...                     ...
+#> 9996  ST-E00600:137:H77Y3C.. TTTGATGTTT...GTGCGGTTAT JJA-<FJJJJ...JJJ7JFFF<A
+#> 9997  ST-E00600:137:H77Y3C.. CGTAAATTGT...TTTAGTTGAA A<A-AAFJ<7...)<-77<7-7<
+#> 9998  ST-E00600:137:H77Y3C.. CAGTTTTCTG...TGAGCCTCTA AA<<<-<)A<...JJAFAFFFAA
+#> 9999  ST-E00600:137:H77Y3C.. AAGCGGCTGG...CAATCTGGCA A<AAFFJJ7F...FJJ-<---AF
+#> 10000 ST-E00600:137:H77Y3C.. TTCTTGGACA...TTGAATCGAC FJ7A<<<-7<...JJJJAFFFAA
 ```
 
 Compact mode returns lower-level raw vectors for throughput-oriented
@@ -282,6 +363,259 @@ counts
 #> 26       *        NA     0
 ```
 
+## Summaries computed inside the reader
+
+Many analyses do not need the alignments themselves, only a summary of
+them: a fragment-size distribution for ATAC-seq or ChIP-seq quality
+control, a mapping-quality profile, or per-base coverage for a
+genome-browser track. The usual route reads every alignment into R first
+and then summarises it. The four functions in this section instead
+compute the summary inside the multithreaded reader. Each thread keeps
+its own running totals while it decodes its share of the file, and only
+the finished summary is returned to R. The checks below compare each
+result with the standard Bioconductor route.
+
+All four functions accept a `ScanBamParam`, of which the `flag` and
+`mapqFilter` settings are applied to each read. (They cannot restrict
+the summary to regions, so setting `which` gives a warning.) The
+following filter (mapped, primary, passing QC) is the usual one for
+fragment-size QC:
+
+``` r
+
+qc_flag <- Rsamtools::scanBamFlag(
+    isUnmappedQuery = FALSE,
+    isSecondaryAlignment = FALSE,
+    isNotPassingQualityControls = FALSE
+)
+qc_param <- Rsamtools::ScanBamParam(flag = qc_flag)
+```
+
+### Fragment-size distribution: `fragment_sizes()`
+
+[`fragment_sizes()`](https://cparsania.github.io/BamScaleR/reference/fragment_sizes.md)
+tabulates the absolute template length (`abs(TLEN)`, the `isize` field
+in `Rsamtools`) of every read that passes the filter. It returns a
+`data.frame` with one row per observed fragment size, in increasing
+order, and the number of reads with that size. Reads that are unmapped,
+or whose mate is unmapped, have no defined fragment size and are
+excluded by default (`drop_mate_unmapped = TRUE`), just as `scanBam()`
+reports `NA` for them.
+
+``` r
+
+fs <- fragment_sizes(bam, param = qc_param, threads = 2)
+str(fs)
+#> 'data.frame':    2047 obs. of  2 variables:
+#>  $ fragment_size: int  59 76 78 79 84 85 86 89 91 93 ...
+#>  $ count        : num  2 2 2 2 4 2 2 4 4 2 ...
+
+## the most common fragment size
+fs[which.max(fs$count), ]
+#>     fragment_size count
+#> 122           212    62
+```
+
+``` r
+
+short <- fs[fs$fragment_size <= 1000, ]
+plot(short$fragment_size, short$count, type = "h",
+     xlab = "Fragment size (bp)", ylab = "Reads")
+```
+
+![Fragment-size distribution of the example BAM (fragments up to 1
+kb).](BamScaleR-intro_files/figure-html/fragment-sizes-plot-1.png)
+
+Fragment-size distribution of the example BAM (fragments up to 1 kb).
+
+The same table computed the standard way, by reading every `isize` into
+R and tabulating it, is identical:
+
+``` r
+
+isize <- Rsamtools::scanBam(
+    bam,
+    param = Rsamtools::ScanBamParam(what = "isize", flag = qc_flag)
+)[[1]]$isize
+tab <- table(abs(isize))
+ref <- data.frame(fragment_size = as.integer(names(tab)),
+                  count = as.numeric(tab))
+identical(fs, ref)
+#> [1] TRUE
+```
+
+### Mapping-quality distribution: `mapq_dist()`
+
+[`mapq_dist()`](https://cparsania.github.io/BamScaleR/reference/mapq_dist.md)
+returns the number of reads at each mapping quality (MAPQ, 0 to 255) as
+a `data.frame` with columns `mapq` and `count`. Unmapped reads have no
+mapping quality (`scanBam()` reports `NA` for them) and are not counted.
+
+``` r
+
+mq <- mapq_dist(bam, param = qc_param, threads = 2)
+mq
+#>   mapq count
+#> 1  255 10000
+```
+
+It is identical to tabulating the `mapq` values read with `scanBam()`:
+
+``` r
+
+mapq <- Rsamtools::scanBam(
+    bam,
+    param = Rsamtools::ScanBamParam(what = "mapq", flag = qc_flag)
+)[[1]]$mapq
+tab <- table(mapq)
+identical(mq, data.frame(mapq = as.integer(names(tab)),
+                         count = as.numeric(tab)))
+#> [1] TRUE
+```
+
+The example BAM was aligned with STAR, which gives every uniquely mapped
+read a MAPQ of 255, so the distribution has a single value. On a BAM
+from an aligner such as Bowtie 2 or BWA, the table shows the full spread
+of MAPQ values, and setting `mapqFilter` in `param` removes reads below
+that value from the distribution.
+
+### Per-base coverage: `bam_coverage()`
+
+[`bam_coverage()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage.md)
+returns per-base read depth as an `RleList`: one run-length encoded
+integer vector per sequence in the BAM header, in header order, each as
+long as the sequence. Sequences with no reads are a single run of zeros.
+CIGAR operations are counted in the same way as
+[`GenomicAlignments::coverage()`](https://rdrr.io/pkg/IRanges/man/coverage-methods.html):
+`M`, `=`, `X` and `D` add depth, `N` (a splice junction) does not, and
+`I`, `S`, `H` and `P` are ignored.
+
+``` r
+
+cov <- bam_coverage(bam, threads = 2)
+cov[c("1", "MT")]
+#> RleList of length 2
+#> $`1`
+#> integer-Rle of length 248956422 with 3132 runs
+#>   Lengths:  630211      19       4       4 ...      26     123      26 1857649
+#>   Values :       0       1       2       3 ...       1       2       1       0
+#> 
+#> $MT
+#> integer-Rle of length 16569 with 518 runs
+#>   Lengths: 140   6  24  34  44  42   4  19 ...  32  41  82 520 127  19 131 684
+#>   Values :   0   1   2   4   5   6   5   4 ...   1   2   1   0   1   2   1   0
+```
+
+The result is an ordinary `RleList`, so the usual `IRanges` tools apply,
+for example per-chromosome summaries or the regions above a depth
+threshold:
+
+``` r
+
+head(data.frame(
+    seqname = names(cov),
+    covered_bp = sum(cov > 0),
+    max_depth = max(cov)
+))
+#>    seqname covered_bp max_depth
+#> 1        1     108800        21
+#> 10      10      28831        10
+#> 11      11      52762         9
+#> 12      12      52669        12
+#> 13      13      15105        11
+#> 14      14      20147        13
+
+## regions of the mitochondrial genome covered by at least 10 reads
+IRanges::slice(cov[["MT"]], lower = 10)
+#> Views on a 16569-length Rle subject
+#> 
+#> views:
+#>      start  end width
+#>  [1]  2502 2597    96 [12 12 12 13 13 13 13 13 13 13 13 13 13 13 12 12 12 ...]
+#>  [2]  6909 6988    80 [10 10 10 10 10 10 10 10 11 11 11 11 11 11 11 11 11 ...]
+#>  [3]  7046 7048     3 [10 10 10]
+#>  [4]  7107 7124    18 [10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 ...]
+#>  [5]  7158 7277   120 [10 10 10 10 10 10 11 11 11 11 11 11 12 12 12 12 12 ...]
+#>  [6]  7301 7313    13 [10 10 10 10 10 10 10 10 10 10 10 10 10]
+#>  [7]  7345 7352     8 [10 10 10 10 10 10 10 10]
+#>  [8]  7819 7829    11 [10 10 10 10 10 10 10 10 10 10 10]
+#>  [9]  8095 8115    21 [10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 10 ...]
+#> [10]  8146 8203    58 [10 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 11 ...]
+#> [11]  9766 9820    55 [10 10 10 10 10 10 11 11 11 11 11 11 11 11 10 10 10 ...]
+#> [12]  9826 9932   107 [10 10 10 10 10 10 11 11 11 11 13 13 13 13 13 13 13 ...]
+```
+
+It is identical to the coverage computed from a `GAlignments` object:
+
+``` r
+
+ref_cov <- GenomicAlignments::coverage(
+    GenomicAlignments::readGAlignments(bam)
+)
+identical(cov, ref_cov)
+#> [1] TRUE
+```
+
+### Coverage straight to a bigWig file: `bam_coverage_bigwig()`
+
+To make a genome-browser track,
+[`bam_coverage_bigwig()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage_bigwig.md)
+computes the same coverage and writes it directly to a bigWig file,
+without creating the coverage `RleList` in R. It returns the path of the
+file it wrote (invisibly). Only non-zero runs are written, which is the
+bigWig convention; uncovered bases read back as zero.
+
+``` r
+
+bw <- tempfile(fileext = ".bw")
+bam_coverage_bigwig(bam, outfile = bw, threads = 2)
+file.size(bw)
+#> [1] 271289
+```
+
+The file can be loaded into a genome browser or read back into R with
+`rtracklayer`. The values match
+[`bam_coverage()`](https://cparsania.github.io/BamScaleR/reference/bam_coverage.md)
+on every sequence (a bigWig stores them as floating-point numbers, so
+they are compared as numbers):
+
+``` r
+
+imported <- rtracklayer::import(bw, as = "RleList")
+all(vapply(names(cov), function(chr) {
+    isTRUE(all.equal(as.numeric(imported[[chr]]), as.numeric(cov[[chr]])))
+}, logical(1)))
+#> [1] TRUE
+```
+
+### Several files at once
+
+Every function accepts several BAM files, as a character vector or an
+[`Rsamtools::BamFileList`](https://rdrr.io/pkg/Rsamtools/man/BamFile-class.html),
+and returns a named list with one result per file. Files are processed
+in parallel according to `BPPARAM`, and `threads` sets the number of
+threads used within each file. The `BPPARAM` object is used as supplied
+and is not modified, so it can be reused for other work afterwards. (On
+Linux, GCC’s OpenMP runtime cannot start threads in a forked
+`MulticoreParam` worker once the R session has used OpenMP threads, and
+the worker would wait forever. `BamScaleR` releases the runtime’s idle
+threads before each `fork()`, so forked workers use `threads` as
+requested. This needs libgomp 9 or later; with an older runtime, use
+`SnowParam()` instead.)
+
+``` r
+
+two <- fragment_sizes(
+    c(rep1 = bam, rep2 = bam),
+    param = qc_param,
+    threads = 1,
+    BPPARAM = BiocParallel::SerialParam()
+)
+vapply(two, function(x) sum(x$count), numeric(1))
+#>  rep1  rep2 
+#> 10000 10000
+```
+
 ## Relationship to existing Bioconductor tools
 
 `BamScaleR` is intended to complement, not replace, existing
@@ -301,18 +635,69 @@ The main difference is therefore performance-oriented: `BamScaleR`
 accelerates the traversal step itself while staying close to existing
 Bioconductor usage patterns.
 
+### BamScaleR and ompBAM
+
+`ompBAM` and `BamScaleR` work at different levels.
+
+`ompBAM` is a header-only C++ library for package developers. It opens a
+BAM file, decompresses its compressed (BGZF) blocks on several OpenMP
+threads, and gives each thread a share of the raw alignment records,
+with C++ functions to read the fields of one record (flag, position,
+CIGAR, tags and so on). It has no R function that reads a BAM file into
+R; its R functions are helpers for developers, such as `use_ompBAM()`
+and `example_BAM()`. To do anything with the records, a package must
+write its own C++ loop over them.
+
+`BamScaleR` is that loop, together with what is needed to use its output
+in Bioconductor workflows:
+
+- **R functions with `Rsamtools` semantics.**
+  [`bam_read()`](https://cparsania.github.io/BamScaleR/reference/bam_read.md)
+  takes the `what` fields of
+  [`Rsamtools::scanBam()`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html)
+  (except `groupid` and `mate_status`), its `tag` fields and
+  `ScanBamParam` settings (`flag`, `mapqFilter`, `which`), and applies
+  them to each record in C++. (`which` selects the alignments that
+  overlap a range, as in `Rsamtools`;
+  [`?bam_read`](https://cparsania.github.io/BamScaleR/reference/bam_read.md)
+  lists the remaining differences.)
+  [`bam_count()`](https://cparsania.github.io/BamScaleR/reference/bam_count.md)
+  and the summary functions apply the filters listed on their help
+  pages, and warn about settings they cannot apply.
+- **Bioconductor output objects.** Results from all threads are merged
+  in file order and converted into a `data.frame` or `DataFrame`, a
+  `scanBam()`-style list (with `DNAStringSet` and `PhredQuality` for
+  sequences and qualities), a `GAlignments` or a `GAlignmentPairs`
+  object; the columns and the `GAlignments` slots are built in compiled
+  code. The package tests compare fields, sequences and qualities with
+  [`Rsamtools::scanBam()`](https://rdrr.io/pkg/Rsamtools/man/scanBam.html),
+  and `GAlignments` objects with `readGAlignments()`, using
+  [`identical()`](https://rdrr.io/r/base/identical.html). They also
+  check that, without `which`, `GAlignmentPairs` output contains the
+  same pairs as `readGAlignmentPairs()`, including for secondary and
+  supplementary alignments.
+- **Summaries inside the reader.** Per-chromosome counts, fragment-size
+  and mapping-quality distributions, per-base coverage, and a bigWig
+  writer (a bundled copy of libBigWig, extended to compress blocks in
+  parallel).
+- **Two levels of parallelism.** OpenMP threads within a file and
+  `BiocParallel` workers across files. With `auto_threads = TRUE` the
+  two are balanced against the number of available cores.
+- **Portable builds.** The `configure` script described under
+  [Installation](#installation) finds a working OpenMP setup on macOS.
+
 ## Session information
 
 ``` r
 
 sessionInfo()
-#> R version 4.6.1 (2026-06-24)
+#> R version 4.6.2 (2026-10-29)
 #> Platform: x86_64-pc-linux-gnu
-#> Running under: Ubuntu 24.04.5 LTS
+#> Running under: Ubuntu 26.04.1 LTS
 #> 
 #> Matrix products: default
 #> BLAS:   /usr/lib/x86_64-linux-gnu/openblas-pthread/libblas.so.3 
-#> LAPACK: /usr/lib/x86_64-linux-gnu/openblas-pthread/libopenblasp-r0.3.26.so;  LAPACK version 3.12.0
+#> LAPACK: /usr/lib/x86_64-linux-gnu/openblas-pthread/libopenblasp-r0.3.32.so;  LAPACK version 3.12.0
 #> 
 #> locale:
 #>  [1] LC_CTYPE=C.UTF-8       LC_NUMERIC=C           LC_TIME=C.UTF-8       
@@ -327,38 +712,41 @@ sessionInfo()
 #> [1] stats     graphics  grDevices utils     datasets  methods   base     
 #> 
 #> other attached packages:
-#> [1] BamScaleR_0.99.2 BiocStyle_2.40.0
+#> [1] BamScaleR_0.99.3 BiocStyle_2.40.0
 #> 
 #> loaded via a namespace (and not attached):
-#>  [1] sass_0.4.10                 generics_0.1.4             
-#>  [3] bitops_1.1-0                SparseArray_1.12.3         
-#>  [5] lattice_0.22-9              digest_0.6.39              
-#>  [7] evaluate_1.0.5              grid_4.6.1                 
-#>  [9] bookdown_0.48               fastmap_1.2.0              
-#> [11] jsonlite_2.0.0              Matrix_1.7-5               
-#> [13] cigarillo_1.2.1             GenomeInfoDb_1.48.0        
-#> [15] BiocManager_1.30.27         httr_1.4.9                 
-#> [17] UCSC.utils_1.8.0            Biostrings_2.80.2          
-#> [19] codetools_0.2-20            textshaping_1.0.5          
-#> [21] jquerylib_0.1.4             abind_1.4-8                
-#> [23] cli_3.6.6                   rlang_1.3.0                
-#> [25] crayon_1.5.3                XVector_0.52.0             
-#> [27] ompBAM_1.16.0               Biobase_2.72.0             
-#> [29] cachem_1.1.0                DelayedArray_0.38.2        
-#> [31] yaml_2.3.12                 otel_0.2.0                 
-#> [33] S4Arrays_1.12.1             tools_4.6.1                
-#> [35] parallel_4.6.1              BiocParallel_1.46.0        
-#> [37] Rsamtools_2.28.0            SummarizedExperiment_1.42.0
-#> [39] BiocGenerics_0.58.1         R6_2.6.1                   
-#> [41] matrixStats_1.5.0           stats4_4.6.1               
-#> [43] lifecycle_1.0.5             Seqinfo_1.2.0              
-#> [45] S4Vectors_0.50.3            fs_2.1.0                   
-#> [47] IRanges_2.46.0              ragg_1.5.2                 
-#> [49] desc_1.4.3                  pkgdown_2.2.1              
-#> [51] bslib_0.12.0                Rcpp_1.1.2                 
-#> [53] systemfonts_1.3.2           xfun_0.61                  
-#> [55] GenomicAlignments_1.48.0    GenomicRanges_1.64.0       
-#> [57] MatrixGenerics_1.24.0       knitr_1.52                 
-#> [59] htmltools_0.5.9             rmarkdown_2.32             
-#> [61] compiler_4.6.1
+#>  [1] SummarizedExperiment_1.42.0 rjson_0.2.23               
+#>  [3] xfun_0.62                   bslib_0.12.0               
+#>  [5] Biobase_2.72.0              lattice_0.23-1             
+#>  [7] tools_4.6.2                 bitops_1.1-0               
+#>  [9] generics_0.1.4              stats4_4.6.2               
+#> [11] curl_8.1.0                  parallel_4.6.2             
+#> [13] Matrix_1.7-6                desc_1.4.3                 
+#> [15] S4Vectors_0.50.3            cigarillo_1.2.1            
+#> [17] lifecycle_1.0.5             compiler_4.6.2             
+#> [19] Rsamtools_2.28.0            textshaping_1.1.0          
+#> [21] Biostrings_2.80.2           Seqinfo_1.2.0              
+#> [23] codetools_0.2-20            GenomeInfoDb_1.48.0        
+#> [25] htmltools_0.5.9             sass_0.5.0                 
+#> [27] RCurl_1.98-1.20             yaml_2.3.12                
+#> [29] pkgdown_2.2.1               crayon_1.5.3               
+#> [31] jquerylib_0.1.4             BiocParallel_1.46.0        
+#> [33] cachem_1.1.0                DelayedArray_0.38.2        
+#> [35] abind_1.4-8                 ompBAM_1.16.0              
+#> [37] digest_0.6.39               restfulr_0.0.17            
+#> [39] bookdown_0.48               fastmap_1.2.0              
+#> [41] grid_4.6.2                  cli_3.6.6                  
+#> [43] SparseArray_1.12.3          S4Arrays_1.12.1            
+#> [45] XML_3.99-0.25               UCSC.utils_1.8.0           
+#> [47] rmarkdown_2.32              XVector_0.52.0             
+#> [49] httr_1.4.9                  matrixStats_1.5.0          
+#> [51] otel_0.3.0                  ragg_1.5.2                 
+#> [53] evaluate_1.0.5              knitr_1.52                 
+#> [55] GenomicRanges_1.64.0        IRanges_2.46.0             
+#> [57] BiocIO_1.22.0               rtracklayer_1.72.0         
+#> [59] rlang_1.3.0                 Rcpp_1.1.2                 
+#> [61] BiocManager_1.30.27         BiocGenerics_0.58.1        
+#> [63] jsonlite_2.0.0              R6_2.6.1                   
+#> [65] MatrixGenerics_1.24.0       GenomicAlignments_1.48.0   
+#> [67] systemfonts_1.3.4           fs_2.1.0
 ```
