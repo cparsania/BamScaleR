@@ -23,3 +23,5 @@
 ^.*\.log$
 ^smoke_report\.html$
 ^.*\.tar\.gz$
+^src/Makevars$
+^inst/benchmarks/run_manuscript_final\.sh$

@@ -15,19 +15,19 @@
 [![Bioc downloads](https://bioconductor.org/shields/downloads/devel/BamScaleR.svg)](https://bioconductor.org/packages/stats/bioc/BamScaleR/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-**BamScaleR** is a multithreaded BAM reader for R, built on the [`ompBAM`](https://bioconductor.org/packages/ompBAM) OpenMP engine. It returns the *exact* Bioconductor objects you already use — verified **byte-identical** to `Rsamtools` and `GenomicAlignments` — but decodes each file across many cores, taking the read step off the critical path in alignment-centric workflows.
+**BamScaleR** is a multithreaded BAM reader for R, built on the [`ompBAM`](https://bioconductor.org/packages/ompBAM) OpenMP engine. It returns the Bioconductor objects you already use — checked with `identical()` against `Rsamtools` and `GenomicAlignments` for the supported settings — but decodes each file across many cores, taking the read step off the critical path in alignment-centric workflows.
 
 - **1.9–2.5× faster** single-file reads than `scanBam` / `readGAlignments`, and never slower — it matches or beats them even on a single thread
-- **Drop-in**: same objects, same `ScanBamParam` filtering, same `BiocParallel` model
-- **In-reader aggregation**: `fragment_sizes()`, `mapq_dist()`, `bam_coverage()`, and single-pass `bam_coverage_bigwig()` fold the computation inside the reader — byte-identical results without materialising per-read objects
+- **Familiar interface**: the same objects, `ScanBamParam` filtering (`flag`, `mapqFilter`, `which`) and `BiocParallel` model; see *Current limitations* for the differences
+- **In-reader aggregation**: `fragment_sizes()`, `mapq_dist()`, `bam_coverage()`, and single-pass `bam_coverage_bigwig()` fold the computation inside the reader — results identical to the standard route, without materialising per-read objects
 - **Two parallel axes**: OpenMP `threads` *within* a file, `BiocParallel` *across* files
-- **Verified correct**: output is byte-identical to the standard tools at every thread count
+- **Verified correct**: output is checked against the standard tools with `identical()`
 
 > **A note on the name.** This package was formerly called **BamScale** and was renamed to BamScaleR to avoid confusion with [BAMscale](https://github.com/ncbi/BAMscale) (Pongor *et al.*, *Epigenetics & Chromatin* 2020), an unrelated NCBI command-line tool that generates normalised coverage tracks and quantifies peaks. The R suffix marks this as the R/Bioconductor implementation; the two projects are not related.
 
 ## Benchmarks
 
-Measured on a deeply sequenced public ENCODE ATAC-seq BAM (ENCFF191LNL, 151,057,932 alignments, 6.8 GB). Intel Xeon Gold 6252 (96 logical cores), warm page cache, median of 5 iterations. Full methodology, figures, and fair-comparison details are in the [benchmark article](https://cparsania.github.io/BamScaleR/articles/benchmark-results.html).
+Measured on a deeply sequenced public ENCODE ATAC-seq BAM (ENCFF191LNL, 151,057,932 alignments, 7.3 GB). Intel Xeon Gold 6252 (96 logical cores), warm page cache, median of 5 iterations. Full methodology, figures, and fair-comparison details are in the [benchmark article](https://cparsania.github.io/BamScaleR/articles/benchmark-results.html).
 
 **Single-file read throughput** — best BamScaleR configuration vs the single-threaded standard reader:
 
@@ -45,9 +45,9 @@ Measured on a deeply sequenced public ENCODE ATAC-seq BAM (ENCFF191LNL, 151,057,
 | Coverage → `RleList` | 72% | **2.49×** |
 | Coverage → bigWig | 41% | **1.52×** |
 
-Every result is measured against output verified equal to the standard tool: the ATAC fragment-size table is byte-identical to `ATACseqQC::fragSizeDist` across all 151,057,932 alignments, and the coverage `RleList` is `identical()` to `GenomicAlignments::coverage()` at every thread count.
+Before timing, the coverage `RleList` and the ATAC fragment-size table were checked `identical()` to the standard tools' output on the full files (the fragment-size table against `ATACseqQC::fragSizeDist` across all 151,057,932 alignments), and the read-pattern outputs on a 1-kb window; the unit tests repeat these comparisons on the example BAM.
 
-**In-reader aggregation** — the reduction is folded into the multithreaded decoder, so no per-read R objects are built at all:
+**In-reader aggregation** — the reduction is folded into the multithreaded decoder, so no per-read R objects are built at all. (These figures and the megadepth comparison come from the API stages of the same benchmark run; they are not part of the benchmark data shipped in `inst/extdata`.)
 
 | Endpoint | Standard Bioconductor route | Standard | BamScaleR | Speedup |
 | --- | --- | ---: | ---: | :---: |
@@ -58,18 +58,20 @@ Every result is measured against output verified equal to the standard tool: the
 
 `bam_coverage_bigwig()` also outperforms [`megadepth`](https://github.com/ChristopherWilks/megadepth), a dedicated C++ coverage engine, by **3.45×** at matched core counts (69.0 s vs 238.0 s at 72 threads) while leaving the track on disk and control in the R session.
 
-Memory scales with the alignments present, not with the genome the BAM header declares: `bam_coverage()` on a 1.4 MB BAM carrying a whole-genome header needs **0.55 GB**, not the 12.6 GB a header-sized allocation would require.
+Memory scales with the alignments present, not with the genome the BAM header declares: `bam_coverage()` on a 1.4 MB BAM carrying a whole-genome header needs **0.55 GB**, not the 12.6 GB a header-sized allocation would require (measured for the 0.99.1 fix; see NEWS).
 
 > BamScaleR is not a raw-decode replacement for command-line `samtools`. Its job is fast, object-faithful decoding *inside* R — putting the cores a single-threaded reader leaves idle to work, and handing back the precise Bioconductor objects your analysis depends on.
 
 ## Installation
 
-Requires R with a C++17 toolchain and an OpenMP-capable compiler; `ompBAM` and the other dependencies are pulled in automatically.
+Requires R with a C++17 toolchain; `ompBAM` and the other dependencies are pulled in automatically. OpenMP enables multithreaded reading within each file and is supported out of the box on Linux and Windows. On macOS, BamScaleR's `configure` script tests which OpenMP setup actually builds and loads (it needs the OpenMP header, from mac.r-project.org or Homebrew); without one the package still works but reads each file on a single thread (unless your own compiler flags switch OpenMP on for every package, e.g. `CPPFLAGS += -Xclang -fopenmp` in `~/.R/Makevars`; `configure` then stops and says so). The *Installation* section of `vignette("BamScaleR-intro")` gives the one-time macOS steps.
 
 Install from GitHub:
 
 ```r
 remotes::install_github("cparsania/BamScaleR")
+# reinstalling the same version (for example after setting up OpenMP on macOS)
+# needs force = TRUE
 ```
 
 BamScaleR is under Bioconductor review ([BiocContributions#226](https://github.com/Bioconductor/BiocContributions/issues/226)). Once it is accepted it will install with:
@@ -94,7 +96,7 @@ x <- bam_read(
   threads = 4
 )
 
-# A GAlignments object (drop-in for readGAlignments)
+# A GAlignments object, as from readGAlignments()
 ga <- bam_read(
   bam,
   what    = c("rname", "pos", "cigar", "strand"),
@@ -114,7 +116,7 @@ sq <- bam_read(
 cnt <- bam_count(bam, threads = 4)
 
 # In-reader aggregation: summaries computed inside the C++ reader,
-# byte-identical to the scanBam/coverage equivalents
+# identical to the scanBam/coverage equivalents (bigWig: same values after import)
 fs  <- fragment_sizes(bam, threads = 4)   # paired-end fragment-size distribution
 mq  <- mapq_dist(bam, threads = 4)        # mapping-quality distribution
 cov <- bam_coverage(bam, threads = 4)     # per-base coverage RleList
@@ -165,7 +167,8 @@ decoded <- decode_seqqual_compact(sq_compact)
 
 ## Current limitations
 
-- `param$which` is implemented as sequential filtering, not indexed random-access jumps.
+- `param$which` is implemented as sequential filtering, not indexed random-access jumps. As in `Rsamtools`, an alignment is kept when it overlaps a range, but one that overlaps several ranges is returned once (under the first), records come in file order, and unmapped records are not returned. With `as = "GAlignmentPairs"`, only pairs with both mates in the ranges are returned.
+- `ScanBamParam` settings `tagFilter`, `simpleCigar` and `reverseComplement` are not supported; setting them gives a warning.
 - `seqqual_mode = "compact"` is optimization-oriented and not intended for strict cross-package output equivalence.
 - `GAlignments` / `GAlignmentPairs` outputs exclude unmapped records by design.
 - Intra-file thread scaling is strongly sublinear and saturates well below the full core count; the benefit is putting otherwise-idle cores to work on a single large file, not near-linear speedup.

@@ -19,58 +19,139 @@ has_ggplot <- requireNamespace("ggplot2", quietly = TRUE)
 ## Overview
 
 `BamScaleR` is a multithreaded BAM reader, built on the `ompBAM` OpenMP engine, that
-returns the same native Bioconductor objects as the standard readers and is a
-drop-in replacement for `Rsamtools::scanBam` and
-`GenomicAlignments::readGAlignments`.
+returns the same native Bioconductor objects as the standard readers, so it can
+take the place of `Rsamtools::scanBam` and `GenomicAlignments::readGAlignments`
+in existing analyses (see `?bam_read` for the differences).
 
 Reading a BAM is only one step of an analysis, so a faster reader speeds a workflow
 end-to-end **only in proportion to the time that workflow spends reading**
 (Amdahl's law). This vignette summarises benchmarks that quantify *both* the raw
 read speedup and its end-to-end effect on two standard workflows — coverage/bigWig
 track generation and ATAC-seq fragment-size QC — with BamScaleR output verified
-**byte-identical** to the standard tools.
+**identical** to that of the standard tools.
+
+```{r load-data}
+## Benchmark summary tables shipped with the package (see "Data provenance").
+extdata <- function(f) {
+  system.file("extdata", f, package = "BamScaleR", mustWork = TRUE)
+}
+bench    <- read.csv(extdata("benchmark_summary.csv"))
+manifest <- read.csv(extdata("benchmark_encode_manifest.csv"))
+checks   <- read.csv(extdata("benchmark_correctness.csv"))
+run_info <- read.csv(extdata("benchmark_run_info.csv"))
+info     <- setNames(run_info$value, run_info$field)
+```
+
+```{r results-data}
+fx  <- function(x, digits = 2) sprintf(paste0("%.", digits, "fx"), x)
+rng <- function(x) sprintf("%.1f--%.1f", min(x), max(x))
+big <- function(x) format(x, big.mark = ",", scientific = FALSE)
+
+is_bs   <- function(d) d$method_family == "BamScaleR"
+fastest <- function(d) d[which.min(d$median_s), , drop = FALSE]
+
+## Read patterns (single file, "fair" track): the single-threaded standard
+## reader vs BamScaleR's fastest configuration over the thread sweep.
+rd <- bench[bench$benchmark == "read", ]
+read_labels <- c(step1 = "Core fields", galignments = "GAlignments",
+                 seqqual = "Sequence + quality")
+read_fields <- c(step1 = "qname/flag/rname/pos/mapq/cigar",
+                 galignments = "-> GAlignments object",
+                 seqqual = "seq + base quality")
+read_tbl <- do.call(rbind, lapply(names(read_labels), function(wl) {
+  x   <- rd[rd$workload == wl, ]
+  bs  <- fastest(x[is_bs(x), ])
+  std <- fastest(x[!is_bs(x), ])
+  data.frame(Workload = read_labels[[wl]], Reads = read_fields[[wl]],
+             `Standard (s)` = round(std$median_s, 1),
+             `BamScaleR (s)` = round(bs$median_s, 1),
+             Threads = bs$threads, Speedup = std$median_s / bs$median_s,
+             check.names = FALSE)
+}))
+
+## Thread scaling: the one-thread comparison with the standard reader, and
+## BamScaleR's own speedup from 1 to 48 threads and beyond 24 threads.
+bs_at <- function(n) vapply(names(read_labels), function(wl)
+  rd$median_s[rd$workload == wl & is_bs(rd) & rd$threads == n], numeric(1))
+std_s <- vapply(names(read_labels), function(wl)
+  rd$median_s[rd$workload == wl & !is_bs(rd)], numeric(1))
+best_bs <- vapply(names(read_labels), function(wl)
+  min(rd$median_s[rd$workload == wl & is_bs(rd)]), numeric(1))
+speedup_1t    <- std_s / bs_at(1)
+scaling_48    <- bs_at(1) / bs_at(48)
+gain_after_24 <- bs_at(24) / best_bs
+
+## Workflows (single file): each arm's configuration with the lowest median
+## end-to-end time. An endpoint's time is the sum of its phase medians, and its
+## read fraction is the standard pipeline's read share of that sum.
+wf <- bench[bench$benchmark == "workflow" & bench$scenario == "single", ]
+wf_best <- function(wl) {
+  x <- wf[wf$workload == wl, ]
+  list(bs = fastest(x[is_bs(x), ]), std = fastest(x[!is_bs(x), ]))
+}
+wf_endpoint <- function(wl, endpoint, with_write) {
+  b <- wf_best(wl)
+  phases <- function(r) {
+    r$read_s + r$compute_s + if (with_write) r$write_s else 0
+  }
+  data.frame(Endpoint = endpoint, Layer = "workflow",
+             `Read fraction` = b$std$read_s / phases(b$std),
+             Speedup = phases(b$std) / phases(b$bs), check.names = FALSE)
+}
+spectrum_tbl <- rbind(
+  data.frame(Endpoint = paste(read_tbl$Workload, "(read)"), Layer = "read",
+             `Read fraction` = 1, Speedup = read_tbl$Speedup,
+             check.names = FALSE),
+  wf_endpoint("coverage", "Coverage -> RleList", with_write = FALSE),
+  wf_endpoint("coverage", "Coverage -> bigWig", with_write = TRUE),
+  wf_endpoint("atacqc", "ATAC fragment-size QC", with_write = TRUE)
+)
+spectrum_tbl <- spectrum_tbl[order(-spectrum_tbl$Speedup), ]
+rownames(spectrum_tbl) <- NULL
+endpoint_speedup <- setNames(spectrum_tbl$Speedup, spectrum_tbl$Endpoint)
+cov_best <- wf_best("coverage")
+cov_read_speedup <- cov_best$std$read_s / cov_best$bs$read_s
+
+## Multi-file matched cores: standard / BamScaleR median, same cores per arm.
+mc <- bench[bench$comparison_track == "matched-cores", ]
+matched <- vapply(c(coverage = "coverage", atacqc = "atacqc"), function(wl) {
+  x <- mc[mc$workload == wl, ]
+  x$median_s[!is_bs(x)] / x$median_s[is_bs(x)]
+}, numeric(1))
+
+## Run description
+single_bam <- manifest[manifest$role == "single", ]
+n_aln  <- unique(rd$n_records)
+n_iter <- unique(bench$iterations[bench$scenario == "single"])
+cpu    <- gsub("\\((R|TM)\\)", "", info[["cpu_model"]])  # Intel(R) Xeon(R) ...
+cpu    <- trimws(sub(" CPU @.*$", "", cpu))
+anchor_n <- checks$n_compared[checks$check == "atacseqqc_anchor"]
+stopifnot(length(n_aln) == 1L, length(n_iter) == 1L, length(anchor_n) == 1L)
+```
 
 The numbers below are a concise summary of a representative benchmark run
-(a deeply sequenced public ENCODE ATAC-seq BAM, ENCFF191LNL, 151,057,932
-alignments; Intel Xeon Gold 6252, 96 logical cores; warm page cache; median of 5
-iterations). The
+(a deeply sequenced public ENCODE ATAC-seq BAM, `r single_bam$accession`,
+`r big(n_aln)` alignments; `r cpu`, `r info[["logical_cores"]]` logical cores;
+warm page cache; median of `r n_iter` iterations). They are computed, when this
+vignette is built, from summary tables shipped with the package (see
+[Data provenance](#data-provenance)). The
 benchmark harness that produces them is in `inst/benchmarks/`
 (`run_server_benchmark.R`, `run_workflow_benchmark.R`); see the last section to
 reproduce the full results.
 
-```{r results-data}
-## Summary results (benchmark run 2026-10-08, BamScaleR 0.99.1, on the 25-file
-## public ENCODE ATAC-seq corpus; see inst/benchmarks/ to reproduce).
-read_tbl <- data.frame(
-  Workload    = c("Core fields", "GAlignments", "Sequence + quality"),
-  Reads       = c("qname/flag/rname/pos/mapq/cigar", "-> GAlignments object", "seq + base quality"),
-  `Standard (s)` = c(263.3, 290.1, 409.8),
-  `BamScaleR (s)` = c(136.0, 115.9, 179.3),
-  Threads     = c(36L, 72L, 24L),
-  Speedup     = c(1.94, 2.50, 2.29),
-  check.names = FALSE
-)
-
-spectrum_tbl <- data.frame(
-  Endpoint      = c("ATAC fragment-size QC", "GAlignments (read)", "Coverage -> RleList",
-                    "Sequence + quality (read)", "Core fields (read)", "Coverage -> bigWig"),
-  Layer         = c("workflow", "read", "workflow", "read", "read", "workflow"),
-  `Read fraction` = c(0.94, 1.00, 0.72, 1.00, 1.00, 0.41),
-  Speedup       = c(4.39, 2.50, 2.49, 2.29, 1.94, 1.52),
-  check.names = FALSE
-)
-```
-
 ## Read throughput on a single large BAM
 
-On a single large BAM, BamScaleR reads **1.9--2.5x faster** than the standard reader
-across three representative access patterns, because it spreads the BGZF decode
-across cores and assembles the output objects in native code:
+On a single large BAM, BamScaleR reads **`r rng(read_tbl$Speedup)`x faster**
+than the standard reader across three representative access patterns, because it
+spreads the BGZF decode across cores and assembles the output objects in native
+code:
 
 ```{r read-table}
 knitr::kable(
   transform(read_tbl, Speedup = sprintf("%.2fx", Speedup)),
-  caption = "Single-file read throughput: best BamScaleR configuration vs the single-threaded standard reader (median of 5 iterations)."
+  caption = paste0("Single-file read throughput: best BamScaleR configuration ",
+                   "vs the single-threaded standard reader (median of ",
+                   n_iter, " iterations).")
 )
 ```
 
@@ -87,10 +168,12 @@ ggplot(read_tbl, aes(stats::reorder(Workload, Speedup), Speedup)) +
   theme_minimal(base_size = 12)
 ```
 
-Two honest points. At **one thread** BamScaleR is modestly faster than the
-single-threaded readers (about 1.1--1.3x, from native-code object assembly); most
-of the win comes from threading, and the scaling is **strongly sublinear** --
-roughly 2.5--4x on 48 threads, largely saturating between 24 and 48 threads. The
+Two points. At **one thread** BamScaleR is `r rng(speedup_1t)`x as fast
+as the single-threaded readers (from native-code object assembly); most of the
+win comes from threading, and the scaling is **strongly sublinear**: going from 1
+to 48 threads speeds BamScaleR itself up by `r rng(scaling_48)`x, and no thread
+count beyond 24 is more than
+`r sprintf("%.1f%%", 100 * (max(gain_after_24) - 1))` faster than 24 threads. The
 value is not near-linear scaling but the ability to use cores that a
 single-threaded reader cannot use at all -- as on one large BAM in an interactive
 session. Object-free command-line decoders such as `samtools` reach several-fold
@@ -125,20 +208,24 @@ ggplot(spectrum_tbl, aes(stats::reorder(Endpoint, Speedup), Speedup, fill = `Rea
 ```
 
 - **ATAC fragment-size QC** is nearly pure read, so BamScaleR's read speedup carries
-  through almost intact: **4.39x** end-to-end.
+  through almost intact:
+  **`r fx(endpoint_speedup[["ATAC fragment-size QC"]])`** end-to-end.
 - **Coverage -> bigWig** is dominated by the shared, single-threaded
   `rtracklayer::export.bw` step (identical work on both arms), so the end-to-end
-  gain is bounded at **1.52x** even though the read phase itself is 5.9x faster.
+  gain is bounded at **`r fx(endpoint_speedup[["Coverage -> bigWig"]])`** even
+  though the read phase itself is `r fx(cov_read_speedup, 1)` faster.
   Stopping at the in-memory coverage `RleList` -- what many analyses consume
-  next -- recovers a **2.49x** gain. (`bam_coverage()` and
-  `bam_coverage_bigwig()` compute these endpoints directly inside the reader,
-  removing the R-side read phase entirely; see the function documentation.)
+  next -- recovers a **`r fx(endpoint_speedup[["Coverage -> RleList"]])`** gain.
+  (`bam_coverage()` and `bam_coverage_bigwig()` compute these endpoints directly
+  inside the reader, removing the R-side read phase entirely; see the function
+  documentation.)
 
 ## A note on cores and fairness
 
 A multithreaded reader can occupy cores a single-threaded one cannot. At **matched
 core counts** (both arms given the same number of cores) the two readers are
-approximately at parity for multi-file processing (coverage ~1.20x, ATAC ~0.97x):
+within about 20% of each other for multi-file processing
+(coverage ~`r fx(matched[["coverage"]])`, ATAC ~`r fx(matched[["atacqc"]])`):
 the single-threaded reader already saturates a machine by parallelising *across*
 files, so BamScaleR's multi-file advantage comes specifically from also threading
 *within* a file -- which pays off when there are fewer files than cores.
@@ -151,21 +238,25 @@ multithreaded reader, so no per-read R objects are ever materialised:
 `fragment_sizes()` (paired-end fragment-size distribution),
 `mapq_dist()` (mapping-quality distribution), `bam_coverage()` (per-base coverage
 `RleList`), and `bam_coverage_bigwig()` (single-pass BAM to bigWig with parallel
-block compression). Each is verified byte-identical to its standard equivalent
-(`table(abs(scanBam(isize)))`, `table(scanBam(mapq))`,
-`coverage(readGAlignments())`, and the serial bigWig writer respectively) -- see
-their reference pages. These remove the read phase from the Amdahl decomposition
-above entirely; comprehensive benchmarks on public ENCODE data accompany the
-manuscript.
+block compression). The first three are tested `identical()` to
+`table(abs(scanBam(isize)))`, `table(scanBam(mapq))` and
+`coverage(readGAlignments())`; the bigWig, read back with `rtracklayer`, has
+the same values as `bam_coverage()`, and its parallel compression gives a file
+byte-identical to the package's own serial writer. These remove the R-side read
+phase from the Amdahl decomposition above; their benchmarks are not part of the
+data shipped with this vignette.
 
 ## Output is identical to the standard tools
 
-Every speedup above is against output verified equal to the standard tool. The
-coverage `RleList` is `identical()` to `GenomicAlignments::coverage()` on
-`readGAlignments` output at every thread count, and the ATAC fragment-size table is
-`identical()` to `Rsamtools::scanBam` and byte-identical (maximum absolute
-difference 0) to `ATACseqQC::fragSizeDist` over all 151,057,932 alignments. This is what
-makes BamScaleR a genuine drop-in rather than an approximation.
+Before the timings, the outputs were checked against the standard tools. On the
+full files, at one thread, the
+coverage `RleList` was `identical()` to `GenomicAlignments::coverage()` on
+`readGAlignments` output, and the ATAC fragment-size table was `identical()` to
+the one from `Rsamtools::scanBam` and to `ATACseqQC::fragSizeDist` over all
+`r big(anchor_n)` alignments; the read-pattern outputs were checked on a 1-kb
+window (`benchmark_correctness.csv`). The package's unit
+tests compare coverage with `coverage(readGAlignments())` and the fragment-size
+and MAPQ tables with `scanBam()` on the example BAM at 1, 2 and 4 threads.
 
 ## Try it
 
@@ -173,7 +264,7 @@ makes BamScaleR a genuine drop-in rather than an approximation.
 library(BamScaleR)
 bam <- ompBAM::example_BAM("Unsorted")
 
-## Alignment fields as a GAlignments object (drop-in for readGAlignments)
+## Alignment fields as a GAlignments object (as from readGAlignments)
 ga <- bam_read(bam, what = c("rname", "pos", "cigar", "strand"),
                as = "GAlignments", threads = 2)
 ga
@@ -184,19 +275,92 @@ df <- bam_read(bam, what = c("qname", "flag", "mapq"),
 head(df)
 ```
 
+## Data provenance
+
+Every result in this vignette is computed, when the vignette is
+built, from four small CSV files shipped with the package in `inst/extdata/`:
+
+```{r load-data-shown, ref.label="load-data", echo=TRUE, eval=FALSE}
+```
+
+- `benchmark_summary.csv`: one row per benchmarked configuration
+  (`r nrow(bench)` rows): median wall-clock time and, for the single-file
+  workflows, the median read, compute and write phases.
+- `benchmark_encode_manifest.csv`: the `r nrow(manifest)` public ENCODE
+  ATAC-seq alignment BAMs (accession, experiment, biosample, size, md5 checksum,
+  read count and download URL).
+- `benchmark_run_info.csv`: host, software versions and git commit of the run.
+- `benchmark_correctness.csv`: the output-equivalence checks the timings were
+  gated on.
+
+They are a subset of the result tables of benchmark run `r info[["run_id"]]`
+(started `r info[["run_date"]]`; BamScaleR `r info[["bamscaler_version"]]` at
+git commit `r substr(info[["git_head"]], 1, 7)`; R `r info[["r_version"]]`;
+`r cpu`, `r info[["logical_cores"]]` logical cores), produced by the harness in
+`inst/benchmarks/` and reduced to these files by
+`inst/scripts/make_benchmark_extdata.R`. The header of that script records the
+exact command line of every step: corpus selection from the ENCODE portal
+(`select_encode_atac.R`), md5-verified download (`download_atac_data.R`), the
+read-pattern and workflow benchmarks (`run_server_benchmark.R`,
+`run_workflow_benchmark.R`), and merging of the staged runs (`merge_runs.R`).
+
+The summary numbers are derived as follows:
+
+- **Read patterns** compare the single-threaded standard reader with
+  BamScaleR's fastest configuration over a sweep of
+  `r paste(sort(unique(rd$threads[is_bs(rd)])), collapse = ", ")` OpenMP
+  threads, on the same file, both returning the same object.
+- **Workflows** take, for each arm, the configuration with the lowest median
+  end-to-end time. An endpoint's time is the sum of its median phases (read +
+  compute, plus the track write for the bigWig endpoint), and its read fraction
+  is the standard pipeline's read time divided by that sum.
+- **Matched cores** divide the standard arm's median time by BamScaleR's on the
+  `r unique(mc$n_files)`-file cohort, with both arms running one thread per file
+  on the same number of cores.
+
+```{r manifest-table}
+encode_page <- sub("@@download/.*$", "", manifest$url)
+knitr::kable(
+  data.frame(
+    Role       = manifest$role,
+    Accession  = sprintf("[%s](%s)", manifest$accession, encode_page),
+    Experiment = manifest$experiment,
+    Biosample  = manifest$biosample,
+    `Reads (M)` = round(manifest$total_reads / 1e6, 1),
+    `Size (GB)` = round(manifest$file_size_bytes / 1e9, 2),
+    check.names = FALSE
+  ),
+  caption = paste0(
+    "The ", nrow(manifest), " public ENCODE ATAC-seq alignment BAMs (GRCh38, ",
+    "paired-end) benchmarked. The single file is the target of every ",
+    "single-file benchmark; the ", sum(manifest$role == "multi"),
+    " multi files form the cohort of the matched-cores comparison. Read ",
+    "counts are the ENCODE QC total reads; md5 checksums and download URLs ",
+    "are in ",
+    "benchmark_encode_manifest.csv.")
+)
+```
+
 ## Reproducing the full benchmarks
 
-The complete benchmark harness ships under `inst/benchmarks/`:
+The complete benchmark harness ships under `inst/benchmarks/`; its `README.md`
+lists the additional packages and command-line tools it needs.
 
 ```{r repro, echo=TRUE, eval=FALSE}
 dir(system.file("benchmarks", package = "BamScaleR"))
+# select_encode_atac.R        : select the ATAC-seq corpus from the ENCODE portal
+# download_atac_data.R        : fetch, md5-verify and index the selected BAMs
 # run_server_benchmark.R      : read-pattern micro-benchmarks (step1 / GAlignments / seq+qual)
 # run_workflow_benchmark.R    : end-to-end coverage and ATAC fragment-size QC workflows
-# download_atac_data.R        : fetch + index the ENCODE GM12878 ATAC BAMs used here
+# merge_runs.R                : merge staged runs into one result directory
+
+## Reduce a finished run to the CSVs this vignette reads
+system.file("scripts", "make_benchmark_extdata.R", package = "BamScaleR")
 ```
 
-Each writes machine-readable result tables (`summary.csv`) plus host and
-correctness metadata, from which the summary figures above are derived.
+Each benchmark writes machine-readable result tables (`summary.csv`) plus host
+and correctness metadata; `make_benchmark_extdata.R` extracts from them the
+files in `inst/extdata/` from which the summary figures above are derived.
 
 ## Session information
 

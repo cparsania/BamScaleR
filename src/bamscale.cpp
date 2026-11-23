@@ -9,13 +9,21 @@ using namespace Rcpp;
 
 #include <algorithm>
 #include <chrono>
+#include <climits>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
+
+#if !defined(_WIN32)
+#include <dlfcn.h>
+#include <pthread.h>
+#endif
 
 // Vendored libBigWig (MIT, Devon Ryan) for native bigWig writing. Built with
 // -DNOCURL (local files only); the header is guarded with extern "C".
@@ -26,8 +34,12 @@ using namespace Rcpp;
 extern "C" { extern int bwCompressLevel; }
 // Enable/disable deferred parallel block compression in the vendored writer.
 extern "C" { void bwsBeginParallel(int on); }
+// Finish a bigWig being written (flush, index, zoom levels); non-zero on error.
+extern "C" { int bwFinalize(bigWigFile_t *fp); }
 // When != 0, the vendored writer prints bwFinalize phase timings to stderr.
 extern "C" { extern int bwsVerbose; }
+// OpenMP threads the vendored writer may use for parallel block compression.
+extern "C" { extern int bwsThreads; }
 // Register in-memory coverage runs so zoom levels are built without re-reading the
 // just-written data (NULL to clear). Runs are the RLE (values, lengths) per contig.
 extern "C" { void bwsSetRuns(const int** rv, const int** rl, const long* n); }
@@ -46,12 +58,90 @@ namespace {
 
 static const std::string TAG_NA_SENTINEL = "__BAMSCALE_TAG_NA__";
 
+// GCC's OpenMP runtime (libgomp) is not fork-safe. Once a thread has run a
+// parallel region with more than one thread, it keeps a pool of worker
+// threads; a child created by fork() (for example a
+// BiocParallel::MulticoreParam worker) inherits the pool's bookkeeping but not
+// its threads, and its next multithreaded region waits for them forever. The
+// pool belongs to the process, so it may have been created by any package
+// (data.table, for example), not only by this one. LLVM's libomp (clang,
+// macOS) re-initialises itself in the child and is not affected.
+//
+// So with libgomp, a fork handler releases the forking thread's pool just
+// before every fork() with omp_pause_resource_all() (OpenMP 5.0; libgomp 9 or
+// later). The parent re-creates its pool on its next parallel region, and the
+// child starts with no pool and can use threads normally. The release applies
+// to every fork() in the session, and, as OpenMP allows, it may discard other
+// libraries' threadprivate data held by the idle threads. The function is
+// looked up at run time (dlsym), so the package also loads, and still
+// releases the pool, when the runtime provides it under another symbol version
+// or the compiler's headers predate it. If the runtime lacks it, a child
+// forked after this package has used threads runs its OpenMP regions on one
+// thread; a pool created by other code then still blocks the child.
+// glibc removes the handlers if the shared object is unloaded.
+#if defined(_OPENMP) && defined(__GNUC__) && !defined(__clang__) && !defined(_WIN32)
+#define BAMSCALER_LIBGOMP_FORK_GUARD 1
+typedef int (*bamscale_pause_fn_t)(int);
+bamscale_pause_fn_t g_pause_fn = NULL;  // omp_pause_resource_all, if available
+volatile int g_omp_threads_used = 0;  // a region with > 1 thread may have run
+volatile int g_forked_after_omp = 0;  // forked without the pool released
+volatile int g_pool_released = 0;     // set by the prepare handler
+
+extern "C" void bamscale_atfork_prepare(void) {
+  // 1 == omp_pause_soft
+  if (g_pause_fn != NULL && g_pause_fn(1) == 0) {
+    g_pool_released = 1;
+    // The pool is gone until the next multithreaded region (clamp_threads()
+    // sets the flag again). LLVM's and Intel's runtimes, when they serve as
+    // libgomp, return non-zero for a second pause with no region in between;
+    // clearing the flag keeps such a fork from being treated as unsafe.
+    g_omp_threads_used = 0;
+  } else {
+    g_pool_released = 0;
+  }
+}
+
+extern "C" void bamscale_atfork_child(void) {
+  if (g_pool_released == 0 && g_omp_threads_used != 0) g_forked_after_omp = 1;
+}
+
+struct AtforkRegistrar {
+  AtforkRegistrar() {
+    void* sym = dlsym(RTLD_DEFAULT, "omp_pause_resource_all");
+    if (sym == NULL) {
+      // R loads package libraries with local scope, so look in the OpenMP
+      // runtime this library actually uses (the one providing
+      // omp_get_max_threads).
+      Dl_info info;
+      if (dladdr(reinterpret_cast<void*>(&omp_get_max_threads), &info) != 0 &&
+          info.dli_fname != NULL) {
+        void* h = dlopen(info.dli_fname, RTLD_LAZY | RTLD_NOLOAD);
+        if (h != NULL) {
+          sym = dlsym(h, "omp_pause_resource_all");
+          dlclose(h);
+        }
+      }
+    }
+    g_pause_fn = reinterpret_cast<bamscale_pause_fn_t>(sym);
+    pthread_atfork(&bamscale_atfork_prepare, NULL, &bamscale_atfork_child);
+  }
+};
+AtforkRegistrar g_atfork_registrar;
+#endif
+
 unsigned int clamp_threads(const int requested) {
 #ifdef _OPENMP
   if (requested <= 1) return 1U;
+#ifdef BAMSCALER_LIBGOMP_FORK_GUARD
+  if (g_forked_after_omp != 0) return 1U;
+#endif
   const unsigned int max_threads = static_cast<unsigned int>(omp_get_max_threads());
-  if (static_cast<unsigned int>(requested) > max_threads) return max_threads;
-  return static_cast<unsigned int>(requested);
+  const unsigned int n = static_cast<unsigned int>(requested) > max_threads ?
+    max_threads : static_cast<unsigned int>(requested);
+#ifdef BAMSCALER_LIBGOMP_FORK_GUARD
+  if (n > 1U) g_omp_threads_used = 1;
+#endif
+  return n;
 #else
   (void)requested;
   return 1U;
@@ -716,15 +806,32 @@ IntegerVector strand_factor_from_codes(const std::vector<int>& strand_codes) {
 // std::to_string, whose per-op heap allocation serialises 48 threads on the
 // malloc arena (~450M allocations on a 229M-read file). `dest` keeps its
 // capacity across reads, so the steady state allocates nothing.
-static inline void ga_format_cigar(pbam1_t& read, std::string& dest) {
+//
+// Returns true when every op has a code in 0..8 (MIDNSHP=X) and a non-zero
+// length -- CIGARs that GAlignments' validity method always accepts. Anything
+// else (an op code above 8, written as '?', or a zero-length op, which the
+// validity method rejects in some positions) returns false so the caller runs
+// validObject() on the result. This test is conservative: it never accepts a
+// CIGAR the validity method rejects. `ref_span` receives the number of
+// reference bases consumed (M, D, N, =, X), i.e. the GAlignments width.
+static inline bool ga_format_cigar(pbam1_t& read, std::string& dest, int64_t& ref_span) {
   static const char GA_CIGAR_OPS[] = "MIDNSHP=X";
+  static const uint32_t GA_CONSUMES_REF =
+    (1U << 0) | (1U << 2) | (1U << 3) | (1U << 7) | (1U << 8);
   dest.clear();
+  ref_span = 0;
+  bool standard = true;
   const uint32_t nop = read.cigar_size();
   const uint32_t* cig = read.cigar();
-  if (cig == NULL) return;
+  if (cig == NULL) return standard;
   for (uint32_t k = 0; k < nop; ++k) {
     uint32_t v = cig[k] >> 4;
     const uint32_t op = cig[k] & 0xFU;
+    if (v == 0U || op > 8U) {
+      standard = false;
+    } else if (((GA_CONSUMES_REF >> op) & 1U) != 0U) {
+      ref_span += static_cast<int64_t>(v);
+    }
     char tmp[12];
     int t = 12;
     if (v == 0U) {
@@ -738,6 +845,7 @@ static inline void ga_format_cigar(pbam1_t& read, std::string& dest) {
     dest.append(tmp + t, static_cast<size_t>(12 - t));
     dest.push_back(op <= 8U ? GA_CIGAR_OPS[op] : '?');
   }
+  return standard;
 }
 
 struct QueryInterval {
@@ -764,7 +872,9 @@ IntervalMap build_interval_map(
 
     QueryInterval interval;
     interval.start = std::max(1, static_cast<int>(starts[i]));
-    interval.end = std::max(interval.start, static_cast<int>(ends[i]));
+    interval.end = static_cast<int>(ends[i]);
+    // A zero-width range (end < start) selects nothing, as in Rsamtools.
+    if (interval.end < interval.start) continue;
 
     if (labels.size() == seqnames.size() && !CharacterVector::is_na(labels[i])) {
       interval.label = as<std::string>(labels[i]);
@@ -780,20 +890,71 @@ IntervalMap build_interval_map(
   return out;
 }
 
+// Number of reference positions an alignment covers (CIGAR M, D, N, =, X), as
+// used for `which`: an alignment [pos, pos + span - 1] is kept when it
+// overlaps a range, as Rsamtools does. At least 1, as htslib treats a record
+// without reference-consuming operations.
+int64_t overlap_span(pbam1_t& read) {
+  static const uint32_t CONSUMES_REF =
+    (1U << 0) | (1U << 2) | (1U << 3) | (1U << 7) | (1U << 8);
+  const uint32_t nop = read.cigar_size();
+  const uint32_t* cig = read.cigar();
+  int64_t span = 0;
+  if (cig != NULL) {
+    for (uint32_t k = 0; k < nop; ++k) {
+      const uint32_t op = cig[k] & 0xFU;
+      if (op <= 8U && ((CONSUMES_REF >> op) & 1U) != 0U) {
+        span += static_cast<int64_t>(cig[k] >> 4);
+      }
+    }
+  }
+  return span > 0 ? span : 1;
+}
+
+// Stop, as Rsamtools does, when a `which` range names a sequence that is not
+// in the BAM header (a range on an absent sequence would otherwise silently
+// match nothing, e.g. "chr1" against a BAM that uses "1").
+void check_which_seqnames(
+    const CharacterVector& which_seqnames,
+    const std::vector<std::string>& chr_names
+) {
+  const std::unordered_set<std::string> known(chr_names.begin(), chr_names.end());
+  std::unordered_set<std::string> seen_missing;
+  std::vector<std::string> missing;
+  for (R_xlen_t i = 0; i < which_seqnames.size(); ++i) {
+    if (CharacterVector::is_na(which_seqnames[i])) continue;
+    const std::string nm = as<std::string>(which_seqnames[i]);
+    if (known.count(nm) == 0 && seen_missing.insert(nm).second) {
+      missing.push_back(nm);
+    }
+  }
+  if (!missing.empty()) {
+    std::string msg;
+    for (size_t i = 0; i < missing.size(); ++i) {
+      msg += (i ? "', '" : "'") + missing[i];
+    }
+    stop("seqlevels in `which` not in BAM header: %s'", msg);
+  }
+}
+
+// TRUE when [start, end] (1-based, inclusive) overlaps a range on `seqname`;
+// `label` gets the first such range in the order given. A record that
+// overlaps several ranges is kept once, under the first. Only called when
+// `which` was given; with no usable range nothing matches.
 bool match_interval(
     const IntervalMap& intervals,
     const std::string& seqname,
-    const int pos,
+    const int64_t start,
+    const int64_t end,
     std::string& label
 ) {
-  if (intervals.empty()) return true;
-
   const auto it = intervals.find(seqname);
   if (it == intervals.end()) return false;
 
   const std::vector<QueryInterval>& vec = it->second;
   for (size_t i = 0; i < vec.size(); ++i) {
-    if (pos >= vec[i].start && pos <= vec[i].end) {
+    if (start <= static_cast<int64_t>(vec[i].end) &&
+        end >= static_cast<int64_t>(vec[i].start)) {
       label = vec[i].label;
       return true;
     }
@@ -966,7 +1127,7 @@ List read_bam_cpp(
     which_ends,
     which_labels
   );
-  const bool need_interval_match = !intervals.empty();
+  const bool need_interval_match = which_seqnames.size() > 0;
 
   pbam_in inbam;
   if (inbam.openFile(bam_file, threads) != 0) {
@@ -979,6 +1140,7 @@ List read_bam_cpp(
   if (chrom_count <= 0) {
     stop("Failed to read BAM header");
   }
+  if (need_interval_match) check_which_seqnames(which_seqnames, chr_names);
 
   PackedStringColumn qname_out;
   std::vector<int> flag_out;
@@ -1119,17 +1281,20 @@ List read_bam_cpp(
         if (!include_unmapped && unmapped) continue;
 
         int this_pos = NA_INTEGER;
+        int64_t this_pos64 = 0;
         int this_ref_id = -1;
         if (!unmapped && ref_id >= 0 && ref_id < chrom_count && (need_rname || need_pos || need_interval_match)) {
           this_ref_id = static_cast<int>(ref_id);
-          this_pos = static_cast<int>(read.pos()) + 1;
+          this_pos64 = static_cast<int64_t>(read.pos()) + 1;
+          this_pos = this_pos64 > INT_MAX ? NA_INTEGER : static_cast<int>(this_pos64);
         }
 
         std::string this_which_label("*");
         if (need_interval_match) {
-          if (this_ref_id < 0 || this_pos == NA_INTEGER) continue;
+          if (this_ref_id < 0) continue;
           const std::string& this_rname_ref = chr_names[static_cast<size_t>(this_ref_id)];
-          if (!match_interval(intervals, this_rname_ref, this_pos, this_which_label)) {
+          const int64_t this_end64 = this_pos64 + overlap_span(read) - 1;
+          if (!match_interval(intervals, this_rname_ref, this_pos64, this_end64, this_which_label)) {
             continue;
           }
         }
@@ -1171,7 +1336,10 @@ List read_bam_cpp(
           local.mapq.push_back(this_mapq);
         }
         if (need_cigar) {
-          ga_format_cigar(read, cigar_scratch);
+          // Generic path: objects built from these columns go through the
+          // validated GAlignments constructor, so the flags are not needed here.
+          int64_t unused_span = 0;
+          (void)ga_format_cigar(read, cigar_scratch, unused_span);
           local.cigar.append(cigar_scratch);
         }
         if (need_mrnm) {
@@ -1182,7 +1350,7 @@ List read_bam_cpp(
         }
         if (need_mpos) {
           const int32_t next_pos = read.next_pos();
-          if (next_pos >= 0) {
+          if (next_pos >= 0 && next_pos < INT_MAX) {
             local.mpos.push_back(static_cast<int>(next_pos) + 1);
           } else {
             local.mpos.push_back(NA_INTEGER);
@@ -1502,8 +1670,15 @@ List galignments_cpp(
     PackedStringColumn qname;
     std::vector<int> flag, qwidth, mapq, mrnm, mpos, isize;
     size_t n_records = 0U;
+    // Records the R side must not trust without validObject(): a non-standard
+    // CIGAR (see ga_format_cigar), or an alignment outside [1, seqlength] --
+    // the latter makes GAlignments validity emit its out-of-bound warning.
+    size_t n_nonstandard_cigar = 0U;
+    size_t n_out_of_bound = 0U;
   };
   std::vector<GaChunk> chunk_data(threads);
+  size_t n_nonstandard_cigar_total = 0U;
+  size_t n_out_of_bound_total = 0U;
 
   double t_fill_acc = 0.0, t_par_acc = 0.0, t_merge_acc = 0.0;
   typedef std::chrono::steady_clock prof_clk;
@@ -1521,6 +1696,8 @@ List galignments_cpp(
     for (unsigned int tid = 0; tid < threads; ++tid) {
       GaChunk& local = chunk_data[tid];
       local.n_records = 0U;
+      local.n_nonstandard_cigar = 0U;
+      local.n_out_of_bound = 0U;
       local.pos.clear();
       local.cigar.clear();
       local.sq_val.clear(); local.sq_len.clear();
@@ -1568,7 +1745,11 @@ List galignments_cpp(
 
         local.n_records++;
 
-        local.pos.push_back(static_cast<int>(read.pos()) + 1);
+        // 1-based start, computed in 64 bits: a (non-conforming) pos of
+        // INT32_MAX would overflow int. Such a start is stored as NA and counted
+        // as out of bound below, so validObject() runs and reports it.
+        const int64_t start1 = static_cast<int64_t>(read.pos()) + 1;
+        local.pos.push_back(start1 > INT_MAX ? NA_INTEGER : static_cast<int>(start1));
 
         const int sq_code = static_cast<int>(ref_id) + 1;         // 1-based factor code
         if (!local.sq_val.empty() && local.sq_val.back() == sq_code) {
@@ -1585,8 +1766,21 @@ List galignments_cpp(
           local.st_len.push_back(1);
         }
 
-        ga_format_cigar(read, cigar_scratch);
+        int64_t ref_span = 0;
+        if (!ga_format_cigar(read, cigar_scratch, ref_span)) {
+          ++local.n_nonstandard_cigar;
+        }
         local.cigar.append(cigar_scratch);
+        {
+          // Same bound test as GenomicRanges:::get_out_of_bound_index() for a
+          // non-circular sequence: start < 1 or end > seqlength. A start that
+          // does not fit in an R integer (stored as NA above) is counted too.
+          const int64_t end1 = start1 + ref_span - 1;
+          if (start1 < 1 || start1 > INT_MAX ||
+              end1 > static_cast<int64_t>(chr_lens[ref_id])) {
+            ++local.n_out_of_bound;
+          }
+        }
 
         if (need_qname) {
           const char* qname_ptr = read.read_name();
@@ -1607,7 +1801,8 @@ List galignments_cpp(
         }
         if (need_mpos) {
           const int32_t next_pos = read.next_pos();
-          local.mpos.push_back(next_pos >= 0 ? static_cast<int>(next_pos) + 1 : NA_INTEGER);
+          local.mpos.push_back(next_pos >= 0 && next_pos < INT_MAX ?
+                               static_cast<int>(next_pos) + 1 : NA_INTEGER);
         }
         if (need_isize) local.isize.push_back(static_cast<int>(read.tlen()));
       }
@@ -1649,6 +1844,8 @@ List galignments_cpp(
     for (unsigned int tid = 0; tid < threads; ++tid) {
       GaChunk& local = chunk_data[tid];
       n_records_total += local.n_records;
+      n_nonstandard_cigar_total += local.n_nonstandard_cigar;
+      n_out_of_bound_total += local.n_out_of_bound;
 
       pos_out.insert(pos_out.end(), local.pos.begin(), local.pos.end());
       cigar_out.append_from(local.cigar);
@@ -1699,7 +1896,9 @@ List galignments_cpp(
     _["cigar"] = cigar_col,
     _["mcols"] = mcols,
     _["seqnames_header"] = wrap(chr_names),
-    _["seqlengths_header"] = wrap(chr_lens)
+    _["seqlengths_header"] = wrap(chr_lens),
+    _["n_nonstandard_cigar"] = static_cast<double>(n_nonstandard_cigar_total),
+    _["n_out_of_bound"] = static_cast<double>(n_out_of_bound_total)
   );
 
   if (ga_profile) {
@@ -1752,6 +1951,8 @@ DataFrame count_bam_cpp(
   if (chrom_count <= 0) {
     stop("Failed to read BAM header");
   }
+  const bool has_which = which_seqnames.size() > 0;
+  if (has_which) check_which_seqnames(which_seqnames, chr_names);
 
   std::vector<unsigned long long> total(static_cast<size_t>(chrom_count), 0ULL);
   unsigned long long total_unmapped = 0ULL;
@@ -1792,12 +1993,13 @@ DataFrame count_bam_cpp(
         const int32_t ref_id = read.refID();
         const bool unmapped = (ref_id < 0) || ((flag & 0x4U) != 0U);
 
-        if (!intervals.empty()) {
+        if (has_which) {
           if (unmapped || ref_id < 0 || ref_id >= chrom_count) continue;
           const std::string& seq = chr_names[static_cast<size_t>(ref_id)];
-          const int pos = static_cast<int>(read.pos()) + 1;
+          const int64_t start1 = static_cast<int64_t>(read.pos()) + 1;
+          const int64_t end1 = start1 + overlap_span(read) - 1;
           std::string label;
-          if (!match_interval(intervals, seq, pos, label)) continue;
+          if (!match_interval(intervals, seq, start1, end1, label)) continue;
         }
 
         if (unmapped) {
@@ -1907,10 +2109,11 @@ DataFrame fragment_sizes_cpp(
         const int this_mapq = static_cast<int>(read.mapq());
         if (this_mapq < min_mapq_clamped) continue;
 
-        // scanBam reports isize = NA when the mate is unmapped (0x8) -- no defined
-        // template length -- so table(abs(isize)) drops those reads. Replicate that
-        // to stay byte-identical to the standard fragment-size distribution.
-        if (drop_mate_unmapped != 0 && (flag & 0x8U) != 0U) continue;
+        // scanBam reports isize = NA when the read or its mate is unmapped (0x4,
+        // 0x8) -- no defined template length -- so table(abs(isize)) drops those
+        // reads. Replicate that to stay identical to the standard fragment-size
+        // distribution.
+        if (drop_mate_unmapped != 0 && (flag & 0xCU) != 0U) continue;
 
         long v = static_cast<long>(read.tlen());
         if (v < 0) v = -v;
@@ -2017,6 +2220,9 @@ DataFrame mapq_dist_cpp(
         const uint32_t flag = read.flag();
         if ((flag & flag_set) != flag_set) continue;
         if ((flag & flag_unset) != 0U) continue;
+        // An unmapped read (0x4) has no mapping quality: scanBam reports mapq
+        // = NA for it, so table(mapq) does not count it.
+        if ((flag & 0x4U) != 0U) continue;
 
         const int mq = static_cast<int>(read.mapq());
         if (mq < min_mapq_clamped) continue;
@@ -2330,30 +2536,34 @@ std::string bam_coverage_bigwig_cpp(
     stop("libBigWig: could not open '%s' for writing", out_file);
   }
 
+  // On any write error: close without finalizing, remove the partial file and
+  // raise an R error, so no truncated bigWig is left behind as if written.
+  auto fail_write = [&](const char* what) {
+    fp->isWrite = 0;
+    bwClose(fp);
+    bwCleanup();
+    bwsSetRuns(NULL, NULL, NULL);
+    bwsBeginParallel(0);
+    std::remove(out_file.c_str());
+    stop("libBigWig: %s while writing '%s'", what, out_file);
+  };
+
   std::vector<const char*> chroms(static_cast<size_t>(n_contigs));
   for (int c = 0; c < n_contigs; ++c) {
     chroms[static_cast<size_t>(c)] = chr_names[static_cast<size_t>(c)].c_str();
   }
 
-  if (bwCreateHdr(fp, zooms)) {
-    bwClose(fp); bwCleanup();
-    stop("libBigWig: bwCreateHdr failed");
-  }
+  if (bwCreateHdr(fp, zooms)) fail_write("bwCreateHdr failed");
   fp->cl = bwCreateChromList(chroms.data(), chr_lens.data(), static_cast<int64_t>(n_contigs));
-  if (fp->cl == NULL) {
-    bwClose(fp); bwCleanup();
-    stop("libBigWig: bwCreateChromList failed");
-  }
-  if (bwWriteHdr(fp)) {
-    bwClose(fp); bwCleanup();
-    stop("libBigWig: bwWriteHdr failed");
-  }
+  if (fp->cl == NULL) fail_write("bwCreateChromList failed");
+  if (bwWriteHdr(fp)) fail_write("bwWriteHdr failed");
   const clk::time_point t_hdr = clk::now();
 
   // Enable deferred parallel block compression for this write (data blocks are
   // captured during add and compressed across threads in bwFinalize; zoom blocks
   // are compressed in parallel too). Output is byte-identical to the serial path.
   bwsBeginParallel(parallel != 0 ? 1 : 0);
+  bwsThreads = static_cast<int>(threads);
   bwsVerbose = (verbose != 0) ? 1 : 0;
 
   // Per contig: emit non-zero runs as (start,end,value) intervals, chunked to bound
@@ -2386,7 +2596,7 @@ std::string bam_coverage_bigwig_cpp(
                              static_cast<uint32_t>(starts.size()))
             : bwAppendIntervals(fp, starts.data(), ends.data(), vals.data(),
                                 static_cast<uint32_t>(starts.size()));
-          if (rc) { bwClose(fp); bwCleanup(); stop("libBigWig: writing intervals failed"); }
+          if (rc) fail_write("writing intervals failed");
           first_block = false;
           starts.clear(); ends.clear(); vals.clear(); cptr.clear();
         }
@@ -2399,7 +2609,7 @@ std::string bam_coverage_bigwig_cpp(
                          static_cast<uint32_t>(starts.size()))
         : bwAppendIntervals(fp, starts.data(), ends.data(), vals.data(),
                             static_cast<uint32_t>(starts.size()));
-      if (rc) { bwClose(fp); bwCleanup(); stop("libBigWig: writing intervals failed"); }
+      if (rc) fail_write("writing intervals failed");
     }
   }
 
@@ -2421,7 +2631,17 @@ std::string bam_coverage_bigwig_cpp(
   }
   bwsSetRuns(run_v.data(), run_l.data(), run_n.data());
 
-  bwClose(fp);   // bwFinalize: parallel-flush data blocks, build index, zoom levels
+  // Finalize explicitly (parallel-flush data blocks, build index and zoom
+  // levels) and check the result, including the final flush to disk: bwClose()
+  // would only print a message on failure (for example a full disk).
+  int fin_rc = bwFinalize(fp);
+  if (fin_rc == 0 && fp->URL != NULL && fp->URL->type == BWG_FILE &&
+      (fflush(fp->URL->x.fp) != 0 || ferror(fp->URL->x.fp))) {
+    fin_rc = 1;
+  }
+  if (fin_rc != 0) fail_write("finishing the file failed (disk full?)");
+  fp->isWrite = 0;   // finalized above; bwClose() must not finalize again
+  bwClose(fp);
   bwCleanup();
   bwsSetRuns(NULL, NULL, NULL);
   bwsBeginParallel(0);   // reset deferral state
@@ -2437,4 +2657,35 @@ std::string bam_coverage_bigwig_cpp(
   }
 
   return out_file;
+}
+
+// Maximum OpenMP threads available to this build, or 0 when the package was
+// compiled without OpenMP (e.g. a macOS toolchain without libomp; see
+// ./configure). Used by the R side to warn that `threads` > 1 has no effect.
+// [[Rcpp::export]]
+int openmp_max_threads_cpp() {
+#ifdef _OPENMP
+  return omp_get_max_threads();
+#else
+  return 0;
+#endif
+}
+
+// For the tests: whether the OpenMP pool is released before fork() (1), or a
+// child forked after this package used threads falls back to one thread (0;
+// GCC's libgomp before version 9), and the OpenMP thread limit (0 without
+// OpenMP).
+// [[Rcpp::export]]
+IntegerVector openmp_fork_info_cpp() {
+#ifdef BAMSCALER_LIBGOMP_FORK_GUARD
+  const int release = g_pause_fn != NULL ? 1 : 0;
+#else
+  const int release = 1;
+#endif
+#ifdef _OPENMP
+  const int limit = omp_get_thread_limit();
+#else
+  const int limit = 0;
+#endif
+  return IntegerVector::create(_["release"] = release, _["thread_limit"] = limit);
 }

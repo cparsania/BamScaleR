@@ -161,6 +161,26 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
+// openmp_max_threads_cpp
+int openmp_max_threads_cpp();
+RcppExport SEXP _BamScaleR_openmp_max_threads_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(openmp_max_threads_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
+// openmp_fork_info_cpp
+IntegerVector openmp_fork_info_cpp();
+RcppExport SEXP _BamScaleR_openmp_fork_info_cpp() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(openmp_fork_info_cpp());
+    return rcpp_result_gen;
+END_RCPP
+}
 
 static const R_CallMethodDef CallEntries[] = {
     {"_BamScaleR_decode_compact_seq_cpp", (DL_FUNC) &_BamScaleR_decode_compact_seq_cpp, 2},
@@ -172,6 +192,8 @@ static const R_CallMethodDef CallEntries[] = {
     {"_BamScaleR_mapq_dist_cpp", (DL_FUNC) &_BamScaleR_mapq_dist_cpp, 5},
     {"_BamScaleR_bam_coverage_cpp", (DL_FUNC) &_BamScaleR_bam_coverage_cpp, 5},
     {"_BamScaleR_bam_coverage_bigwig_cpp", (DL_FUNC) &_BamScaleR_bam_coverage_bigwig_cpp, 10},
+    {"_BamScaleR_openmp_max_threads_cpp", (DL_FUNC) &_BamScaleR_openmp_max_threads_cpp, 0},
+    {"_BamScaleR_openmp_fork_info_cpp", (DL_FUNC) &_BamScaleR_openmp_fork_info_cpp, 0},
     {NULL, NULL, 0}
 };
 

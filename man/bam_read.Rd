@@ -29,7 +29,9 @@ bam_read(
 
 \item{param}{Optional \code{Rsamtools::ScanBamParam} (or a compatible list for
 lightweight use). The following fields are honored:
-\code{mapqFilter}, \code{flag}, \code{which}, \code{what}, and \code{tag}.}
+\code{mapqFilter}, \code{flag}, \code{which}, \code{what}, and \code{tag}. \code{tagFilter},
+\code{simpleCigar} and \code{reverseComplement} are not supported; setting them
+gives a warning and they are ignored.}
 
 \item{what}{Character vector of fields to return, similar to
 \code{scanBam(what=...)}. Supported fields are
@@ -50,8 +52,11 @@ lightweight use). The following fields are honored:
 \item{seqqual_mode}{Controls representation of \code{seq}/\code{qual} when those
 fields are requested:
 \itemize{
-\item \code{"compatible"} (default): return character vectors matching
-\code{scanBam}-style expectations,
+\item \code{"compatible"} (default): return \code{seq} and \code{qual} as
+\code{Biostrings::DNAStringSet} and \code{Biostrings::PhredQuality} objects,
+identical to those from \code{Rsamtools::scanBam()}. These are best held in a
+\code{DataFrame} (\code{as = "DataFrame"}); a base \code{data.frame} can carry them but
+cannot print them,
 \item \code{"compact"}: return lower-level raw list-columns for faster/lower-overhead
 extraction. In compact mode, \code{seq} is returned as one \code{raw} vector per read
 containing BAM-native packed sequence bytes (two bases per byte), and
@@ -63,11 +68,16 @@ missing quality values. This mode is currently supported for
 }}
 
 \item{threads}{Requested number of OpenMP threads used for
-reading/decompression. May be capped when \code{auto_threads = TRUE}.}
+reading/decompression. May be capped when \code{auto_threads = TRUE}. Values
+above 1 require a build with OpenMP (see the Installation section of
+\code{vignette("BamScaleR-intro")}); without it a warning is issued once per
+session and each file is read on one thread.}
 
 \item{BPPARAM}{\code{BiocParallel} parameter used when \code{file} contains
 more than one BAM. Defaults to \code{BiocParallel::bpparam()}. Set to \code{NULL}
-to force serial file processing.}
+to force serial file processing. The object is used as supplied and is
+never modified, so it can be reused afterwards; an already-started
+cluster stays running with its configured number of workers.}
 
 \item{auto_threads}{Logical; when \code{TRUE} and \code{BPPARAM} has multiple workers,
 BamScaleR adaptively avoids oversubscription by preserving higher
@@ -75,10 +85,12 @@ per-file OpenMP thread counts when possible and reducing the number of
 concurrently active file workers before shrinking per-file threads.}
 
 \item{use.names}{Passed to alignment object conversion. When \code{TRUE}, read names
-(\code{qname}) are used as object names.}
+(\code{qname}) are used as object names (they are read for this even when
+\code{what} does not include \code{"qname"}).}
 
 \item{with.which_label}{Logical; if \code{TRUE} and \code{param} includes \code{which},
-an extra \code{which_label} column is returned.}
+an extra \code{which_label} column is returned. It is a character column (or
+mcol), where \code{readGAlignments()} returns a factor \code{Rle}.}
 
 \item{include_unmapped}{Logical; whether unmapped records are retained
 (subject to \code{param$flag} constraints).}
@@ -96,8 +108,8 @@ one per BAM file.
 }
 \details{
 \code{bam_read()} is intentionally column-compatible with common BAM fields used by
-Bioconductor workflows and can be used as a fast drop-in reader before
-conversion to downstream classes.
+Bioconductor workflows and can be used in place of \code{Rsamtools::scanBam()}
+for the supported fields and settings; the differences are listed below.
 
 Parallelism model:
 \itemize{
@@ -109,7 +121,25 @@ Parallelism model:
 first limits the number of concurrently active workers to preserve the
 requested per-file thread count within the detected core budget, then
 caps per-file OpenMP threads only if a single file would still
-oversubscribe the machine.
+oversubscribe the machine. \code{BPPARAM} itself is never changed. A
+\code{MulticoreParam} that is not running is replaced by a copy with fewer
+workers; a \code{SnowParam} that is not running is started with only the
+workers needed (also when there are fewer files than workers) and
+stopped again afterwards. For a running cluster, or another kind of
+\code{BPPARAM}, the files are grouped into that many \code{bplapply()} tasks; an
+error then stops its whole group, and \code{BiocParallel::bptry()} returns
+one result per group rather than per file.
+\item GCC's OpenMP runtime (the usual one on Linux) cannot start threads in a
+process created by \code{fork()} once its parent has used OpenMP threads, and
+such a forked worker (\code{BiocParallel::MulticoreParam}) would wait forever.
+BamScaleR therefore releases the runtime's idle threads just before each
+\code{fork()} in the session, so forked workers can use \code{threads} as
+requested, whichever package used OpenMP first. (This may also discard
+other libraries' OpenMP thread-private data.) With an OpenMP runtime
+too old to support this (GCC's libgomp before version 9), a worker forked
+after BamScaleR has used several threads reads on one thread, and a
+worker forked after another package used OpenMP threads can still hang;
+use \code{BiocParallel::SnowParam()} (type \code{"SOCK"}) there.
 }
 
 Compatibility notes:
@@ -118,8 +148,17 @@ Compatibility notes:
 \code{Rsamtools::scanBam()}. \code{rname}/\code{mrnm} levels are the BAM header reference
 names; unmapped or unset references are \code{NA} (not \code{"*"}). \code{strand} has
 levels \code{c("+", "-", "*")}.
-\item Region filtering via \code{param$which} is supported as a sequential filter
-(not index-jump random access).
+\item Region filtering via \code{param$which} is a sequential filter (the whole file
+is read; the BAM index is not used). As in \code{Rsamtools}, a record is kept
+when its alignment overlaps a range. Unlike \code{Rsamtools}, a record that
+overlaps several ranges is returned once, labelled with the first of
+them; records come in file order rather than grouped by range; and
+unmapped records are not returned when \code{which} is set. As in
+\code{Rsamtools}, a zero-width range selects nothing, and a range on a
+sequence that is not in the BAM header is an error. Repeated range labels
+are made unique with \code{make.unique()}, one batch per range; a range given
+twice therefore gets an empty second batch, where \code{scanBam()} repeats
+the records.
 \item Flag filtering uses \code{ScanBamFlag} semantics by converting logical flag
 requirements into required-set and required-unset bit masks.
 \item Tag values are returned with their native BAM-derived type, matching
@@ -137,6 +176,30 @@ string-materialization costs; use \code{decode_compact_seq()},
 \code{decode_compact_qual()}, or \code{decode_seqqual_compact()} to decode compact
 output back to standard string form when needed.
 \item \code{"GAlignments"} and \code{"GAlignmentPairs"} output exclude unmapped records.
+\item For plain \code{as = "GAlignments"} requests (no \code{which}, tags, \code{seq} or
+\code{qual}), the object is assembled from slots built in C++. Every invariant
+checked by the \code{GAlignments} validity method holds by construction, except
+for two kinds of record that the reader counts: a CIGAR with an op code
+above 8 or a zero-length op (which the validity method may reject), and
+an alignment that extends outside its sequence. If either occurs,
+\code{methods::validObject()} is run on the result, so an invalid object is
+never returned and out-of-bound alignments give the same warning as
+\code{GenomicAlignments::readGAlignments()}. Set
+\code{options(BamScaleR.ga_fastpath = FALSE)} to always use the validating
+\code{GAlignments} constructor instead.
+\item For \code{as = "GAlignmentPairs"}, mates are matched by
+\code{GenomicAlignments::makeGAlignmentPairs()}, on the read name, each
+record's position against its mate's \code{mrnm}/\code{mpos}, the strand,
+first/last, proper-pair and secondary flags. Without \code{which}, the result contains the
+same pairs as \code{GenomicAlignments::readGAlignmentPairs()}, ordered by the
+position of the first mate (pairs whose first mates start at the same
+position may come in a different order). With \code{which}, records are
+filtered before pairing, so only pairs with both mates in the ranges are
+returned, each once, whereas \code{readGAlignmentPairs()} returns every pair
+with at least one mate in a range. Ambiguous mates are dropped, and
+\code{BamFile} read-name options (\code{qnamePrefixEnd}, \code{qnameSuffixStart}) are not
+used. The mates' mcols hold the requested \code{what} fields and tags that are
+not alignment slots, as for \code{as = "GAlignments"}.
 \item \code{as = "scanBam"} returns a strict scan-like list-of-lists:
 without \code{param$which}, it returns one unnamed batch; with \code{param$which},
 it returns one batch per range label (including empty ranges), with

@@ -12,8 +12,9 @@ BamScaleR quality extraction.}
 }
 \value{
 A character vector containing decoded quality strings. Entries with
-all-missing quality bytes are returned as \code{"*"}, matching BamScaleR's
-compatibility mode.
+all-missing quality bytes (value 255) are returned as \code{"*"}, the SAM
+notation for a missing quality. (The compatible mode of \code{bam_read()}
+instead returns \code{Rsamtools::scanBam()}'s \code{PhredQuality} for such reads.)
 }
 \description{
 Decodes \code{qual} values returned by \code{bam_read(..., seqqual_mode = "compact")}

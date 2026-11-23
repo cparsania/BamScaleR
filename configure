@@ -1,0 +1,343 @@
+#!/bin/sh
+#
+# configure for BamScaleR: choose OpenMP compile/link flags, write src/Makevars.
+#
+# Linux and other non-macOS platforms use R's own SHLIB_OPENMP_* macros, as
+# Writing R Extensions recommends. (Windows uses src/Makevars.win and an empty
+# configure.win; this script is not run there.)
+#
+# macOS needs more care. Apple clang does not enable OpenMP by default, and
+# CRAN's R for macOS leaves R's SHLIB_OPENMP_* flags empty, so with a stock
+# setup the package simply builds without OpenMP. Users who enable OpenMP
+# themselves usually add "-Xclang -fopenmp" (for example in ~/.R/Makevars).
+# That flag turns on OpenMP code generation, but -Xclang passes it to the
+# compiler front end only, so the clang driver never links the OpenMP runtime
+# (libomp). A package that relies on $(SHLIB_OPENMP_CXXFLAGS) in PKG_LIBS then
+# builds, but fails when loaded with
+#     symbol not found in flat namespace '___kmpc_...'
+# because R links shared objects with -undefined dynamic_lookup.
+#
+# So on macOS each candidate flag set is tested by building a small shared
+# object that uses the same OpenMP constructs as the package (parallel regions,
+# critical sections, atomics, static and dynamic loop schedules with 32- and
+# 64-bit loop variables) and loading it into R with dyn.load(), the step that
+# fails above. The first candidate that loads is used. If none works, BamScaleR
+# is built without OpenMP: it still works, but each BAM is processed on a single
+# thread, and a message below says why.
+#
+# Which runtime is linked: CRAN's R ships libomp.dylib in R_HOME/lib and puts
+# -L$(R_HOME)/lib ahead of PKG_LIBS on the link line, so with CRAN's R every
+# "-lomp" candidate links R's own runtime, and only one OpenMP runtime is ever
+# loaded into the session. An OpenMP install from mac.r-project.org or Homebrew
+# then only supplies the omp.h header. Its runtime is linked only by builds of
+# R that do not ship libomp.
+#
+# Apple clang 17 (Xcode 16.3 and later) emits a runtime call for dynamic loop
+# schedules, __kmpc_dispatch_deinit, that libomp builds older than LLVM 19 do
+# not have. If R's bundled libomp is older than the compiler, the probe rejects
+# it, and the package is built without OpenMP rather than failing to load.
+#
+# To override detection, set BOTH BAMSCALER_OPENMP_CXXFLAGS and
+# BAMSCALER_OPENMP_LIBS (and optionally BAMSCALER_OPENMP_CFLAGS) in the
+# environment; they are used as-is, without probing. Set both to empty strings
+# for a build without OpenMP.
+
+: "${R_HOME:=`R RHOME`}"
+if test -z "${R_HOME}"; then
+    echo "configure: could not determine R_HOME" >&2
+    exit 1
+fi
+RBIN="${R_HOME}/bin/R"
+
+OMP_CXXFLAGS='$(SHLIB_OPENMP_CXXFLAGS)'
+OMP_CFLAGS='$(SHLIB_OPENMP_CFLAGS)'
+OMP_LIBS='$(SHLIB_OPENMP_CXXFLAGS)'
+OMP_NOTE="R's SHLIB_OPENMP_* macros"
+
+no_openmp() {
+    OMP_CXXFLAGS=""
+    OMP_CFLAGS=""
+    OMP_LIBS=""
+    OMP_NOTE="none ($1)"
+}
+
+# ---------------------------------------------------------------------------
+# macOS: probe flag sets until one produces a shared object R can load.
+# ---------------------------------------------------------------------------
+probe_dir=""
+cleanup_probe() {
+    if test -n "${probe_dir}" && test -d "${probe_dir}"; then
+        rm -rf "${probe_dir}"
+    fi
+}
+
+# try_openmp CXXFLAGS CFLAGS LIBS -> exit status 0 if the probe builds and loads.
+# Every PKG_* variable is set explicitly (as in src/Makevars) so that values
+# exported in the environment cannot make the probe differ from the real build.
+try_openmp() {
+    rm -f "${probe_dir:?}"/*.o "${probe_dir:?}"/*.so "${probe_dir:?}/Makevars"
+    {
+        echo "CXX_STD = CXX17"
+        echo "PKG_CPPFLAGS = -DNOCURL"
+        echo "PKG_CXXFLAGS = $1"
+        echo "PKG_CFLAGS = $2"
+        echo "PKG_LIBS = $3"
+    } > "${probe_dir}/Makevars"
+    (
+        cd "${probe_dir}" &&
+        "${RBIN}" CMD SHLIB -o omp_probe.so omp_probe_cxx.cpp omp_probe_c.c \
+            >> config.log 2>&1 &&
+        "${RBIN}" --vanilla --no-echo -e '
+            dyn.load("omp_probe.so")
+            n <- .C("bamscaler_omp_probe_cxx", n = 0L)$n
+            m <- .C("bamscaler_omp_probe_c", n = 0L)$n
+            if (!isTRUE(n >= 1L) || !isTRUE(m >= 1L)) quit(status = 1L)
+        ' >> config.log 2>&1
+    )
+}
+
+# Explains a probe failure caused by an OpenMP runtime older than the
+# compiler; returns 1, printing nothing, for any other cause.
+deinit_note() {
+    grep -q "dispatch_deinit" "${probe_dir}/config.log" || return 1
+    echo "*** The OpenMP runtime found is older than your compiler: Apple"
+    echo "*** clang 17 (Xcode 16.3 or later) needs libomp from LLVM 19 or later."
+    if test -n "${R_LIBOMP_DIR}"; then
+        echo "*** The runtime linked is the one that ships with R"
+        echo "*** (${R_LIBOMP_DIR}/libomp.dylib). Use an R release built with"
+        echo "*** the same Xcode generation, or older Command Line Tools."
+    else
+        echo "*** Install the runtime matching your Xcode from"
+        echo "*** https://mac.r-project.org/openmp/ (or 'brew upgrade libomp')."
+    fi
+    return 0
+}
+
+probe_darwin() {
+    cat > "${probe_dir}/omp_probe_cxx.cpp" <<'EOF'
+#include <omp.h>
+#ifndef _OPENMP
+#error "OpenMP is not enabled"
+#endif
+// Uses the OpenMP constructs found in src/bamscale.cpp and the ompBAM headers,
+// so every runtime entry point the package needs is resolved at dyn.load().
+extern "C" void bamscaler_omp_probe_cxx(int* n) {
+    int count = 0, s32 = 0, d32 = 0;
+    long long d64 = 0;
+#pragma omp parallel num_threads(2)
+    {
+#pragma omp critical
+        count += 1;
+    }
+#pragma omp parallel for num_threads(2) schedule(static, 1)
+    for (unsigned int u = 0; u < 4U; ++u) {
+#pragma omp atomic
+        s32 += 1;
+    }
+#pragma omp parallel for num_threads(2) schedule(dynamic, 1)
+    for (int i = 0; i < 4; ++i) {
+#pragma omp atomic
+        d32 += 1;
+    }
+#pragma omp parallel for num_threads(2) schedule(dynamic, 1)
+    for (long long j = 0; j < 4; ++j) {
+#pragma omp atomic
+        d64 += 1;
+    }
+    *n = (s32 == 4 && d32 == 4 && d64 == 4 && omp_get_max_threads() >= 1) ? count : 0;
+}
+EOF
+    cat > "${probe_dir}/omp_probe_c.c" <<'EOF'
+#ifndef _OPENMP
+#error "OpenMP is not enabled"
+#endif
+/* As in src/libBigWig/bwWrite.c: a dynamic loop over a 64-bit index. */
+void bamscaler_omp_probe_c(int* n) {
+    int count = 0;
+#pragma omp parallel for num_threads(2) schedule(dynamic, 32)
+    for (long long i = 0; i < 4; i++) {
+#pragma omp atomic
+        count += 1;
+    }
+    *n = count == 4 ? 1 : 0;
+}
+EOF
+
+    R_LIBOMP_DIR=""
+    if test -f "${R_HOME}/lib/libomp.dylib"; then
+        R_LIBOMP_DIR="${R_HOME}/lib"
+    fi
+    BREW_LIBOMP=""
+    for d in /opt/homebrew/opt/libomp /usr/local/opt/libomp; do
+        if test -f "${d}/lib/libomp.dylib"; then
+            BREW_LIBOMP="${d}"
+            break
+        fi
+    done
+
+    # Each candidate: compile flags | link flags. Compile flags are used for
+    # both C++ and C (clang is the compiler for both on macOS).
+    set -- \
+        '$(SHLIB_OPENMP_CXXFLAGS)|$(SHLIB_OPENMP_CXXFLAGS)'
+    if test -n "${R_LIBOMP_DIR}"; then
+        set -- "$@" \
+            "\$(SHLIB_OPENMP_CXXFLAGS)|\$(SHLIB_OPENMP_CXXFLAGS) -L${R_LIBOMP_DIR} -lomp" \
+            "-Xclang -fopenmp|-L${R_LIBOMP_DIR} -lomp"
+    fi
+    set -- "$@" \
+        '$(SHLIB_OPENMP_CXXFLAGS)|$(SHLIB_OPENMP_CXXFLAGS) -lomp' \
+        '-Xclang -fopenmp|-lomp'
+    if test -n "${BREW_LIBOMP}"; then
+        # Homebrew's libomp is keg-only, so its header needs an explicit -I.
+        # (With CRAN's R, -lomp still resolves to R's runtime; see above.)
+        set -- "$@" \
+            "-Xclang -fopenmp -I${BREW_LIBOMP}/include|-L${BREW_LIBOMP}/lib -lomp"
+    fi
+
+    for cand in "$@"; do
+        c_flags=`echo "${cand}" | sed 's/|.*$//'`
+        l_flags=`echo "${cand}" | sed 's/^[^|]*|//'`
+        cc_flags=`echo "${c_flags}" | sed 's/SHLIB_OPENMP_CXXFLAGS/SHLIB_OPENMP_CFLAGS/'`
+        echo "--- candidate: compile '${c_flags}' link '${l_flags}'" >> "${probe_dir}/config.log"
+        if try_openmp "${c_flags}" "${cc_flags}" "${l_flags}"; then
+            OMP_CXXFLAGS="${c_flags}"
+            OMP_CFLAGS="${cc_flags}"
+            OMP_LIBS="${l_flags}"
+            OMP_NOTE="macOS probe (compile '${c_flags}', link '${l_flags}')"
+            return 0
+        fi
+    done
+
+    # A build without OpenMP flags only helps if the compiler then really
+    # builds without OpenMP. If the user's own flags (for example
+    # CPPFLAGS += -Xclang -fopenmp or CFLAGS += -Xclang -fopenmp in
+    # ~/.R/Makevars) turn OpenMP on for every package, the result would still
+    # need a runtime and fail to load. Check C++ and C, with the PKG_*
+    # variables set as in the real build.
+    cat > "${probe_dir}/omp_plain.cpp" <<'EOF'
+#ifdef _OPENMP
+#error "BAMSCALER: OpenMP is enabled by the user's own compiler flags"
+#endif
+extern "C" void bamscaler_plain(int* n) { *n = 1; }
+EOF
+    cat > "${probe_dir}/omp_plain_c.c" <<'EOF'
+#ifdef _OPENMP
+#error "BAMSCALER: OpenMP is enabled by the user's own compiler flags"
+#endif
+void bamscaler_plain_c(int* n) { *n = 1; }
+EOF
+    rm -f "${probe_dir:?}"/*.o "${probe_dir:?}"/*.so
+    {
+        echo "CXX_STD = CXX17"
+        echo "PKG_CPPFLAGS = -DNOCURL"
+        echo "PKG_CXXFLAGS ="
+        echo "PKG_CFLAGS ="
+        echo "PKG_LIBS ="
+    } > "${probe_dir}/Makevars"
+    (cd "${probe_dir}" &&
+        "${RBIN}" CMD SHLIB -o omp_plain.so omp_plain.cpp omp_plain_c.c >> config.log 2>&1)
+    if grep -q "BAMSCALER: OpenMP is enabled by the user" "${probe_dir}/config.log"; then
+        user_omp=""
+        for v in CPPFLAGS CFLAGS CXX17FLAGS CC CXX17; do
+            f=`"${RBIN}" CMD config "${v}" 2>/dev/null | tr ' ' '\n' | grep -i 'openmp' | tr '\n' ' '`
+            if test -n "${f}"; then user_omp="${user_omp} ${v}: ${f}"; fi
+        done
+        {
+            echo "*** BamScaleR: no working OpenMP setup was found, and OpenMP is"
+            echo "*** switched on by your own compiler flags, which apply to every"
+            echo "*** package (for example 'CPPFLAGS += -Xclang -fopenmp' or"
+            echo "*** 'CFLAGS += -Xclang -fopenmp' in ~/.R/Makevars), so a build"
+            echo "*** without OpenMP is not possible either."
+            if test -n "${user_omp}"; then
+                echo "*** OpenMP flags in R's configuration:${user_omp}"
+            fi
+            if ! deinit_note; then
+                echo "*** If the OpenMP header is missing, install the OpenMP files"
+                echo "*** matching your Xcode from https://mac.r-project.org/openmp/"
+                echo "*** (or 'brew install libomp')."
+            fi
+            echo "*** Otherwise remove those flags (BamScaleR then builds with one"
+            echo "*** thread per file), or set BAMSCALER_OPENMP_CXXFLAGS and"
+            echo "*** BAMSCALER_OPENMP_LIBS to flags that load."
+            echo "*** Probe log:"
+            sed 's/^/***   /' "${probe_dir}/config.log" | tail -n 40
+        } >&2
+        exit 1
+    fi
+
+    no_openmp "no working OpenMP toolchain found"
+    echo "*** BamScaleR: no working OpenMP toolchain found on macOS."
+    echo "*** Building without OpenMP: BamScaleR will work, but each BAM is"
+    echo "*** processed on a single thread."
+    if ! deinit_note; then
+        echo "*** To enable multithreading, install the OpenMP runtime matching"
+        echo "*** your Xcode from https://mac.r-project.org/openmp/ (or run"
+        echo "*** 'brew install libomp'), then reinstall BamScaleR from source."
+    fi
+    echo "*** (In a source checkout, rebuild with 'R CMD INSTALL --preclean .'"
+    echo "*** or devtools::load_all(recompile = TRUE).)"
+    echo "*** Probe log:"
+    sed 's/^/***   /' "${probe_dir}/config.log" | tail -n 40
+    return 0
+}
+
+if test -n "${BAMSCALER_OPENMP_CXXFLAGS+set}" || test -n "${BAMSCALER_OPENMP_LIBS+set}" ||
+   test -n "${BAMSCALER_OPENMP_CFLAGS+set}"; then
+    if test -z "${BAMSCALER_OPENMP_CXXFLAGS+set}" || test -z "${BAMSCALER_OPENMP_LIBS+set}"; then
+        echo "configure: set both BAMSCALER_OPENMP_CXXFLAGS and BAMSCALER_OPENMP_LIBS" >&2
+        echo "configure: (either may be empty), or neither to detect the flags." >&2
+        exit 1
+    fi
+    OMP_CXXFLAGS="${BAMSCALER_OPENMP_CXXFLAGS}"
+    OMP_CFLAGS="${BAMSCALER_OPENMP_CFLAGS-${BAMSCALER_OPENMP_CXXFLAGS}}"
+    OMP_LIBS="${BAMSCALER_OPENMP_LIBS}"
+    OMP_NOTE="BAMSCALER_OPENMP_* environment variables"
+elif test "`uname -s`" = "Darwin"; then
+    probe_dir=`mktemp -d "${TMPDIR:-/tmp}/bamscaler-omp.XXXXXX" 2>/dev/null` ||
+        probe_dir=`mktemp -d "/tmp/bamscaler-omp.XXXXXX" 2>/dev/null` ||
+        probe_dir=""
+    if test -z "${probe_dir}"; then
+        no_openmp "could not create a directory for the OpenMP probe"
+        echo "*** BamScaleR: could not create a temporary directory for the OpenMP"
+        echo "*** probe; building without OpenMP (each BAM on a single thread)."
+    else
+        trap cleanup_probe EXIT
+        trap 'exit 1' HUP INT TERM
+        probe_darwin
+    fi
+fi
+
+echo "BamScaleR OpenMP flags from ${OMP_NOTE}:"
+echo "  compile (C++): ${OMP_CXXFLAGS}"
+echo "  compile (C):   ${OMP_CFLAGS}"
+echo "  link:          ${OMP_LIBS}"
+
+# Escape characters that are special in a sed replacement (\ & and the |
+# delimiter) before substituting the flags into src/Makevars.in.
+sed_escape() {
+    printf '%s\n' "$1" | sed -e 's/[\\&|]/\\&/g'
+}
+E_CXXFLAGS=`sed_escape "${OMP_CXXFLAGS}"`
+E_CFLAGS=`sed_escape "${OMP_CFLAGS}"`
+E_LIBS=`sed_escape "${OMP_LIBS}"`
+
+if ! sed -e "s|@OPENMP_CXXFLAGS@|${E_CXXFLAGS}|" \
+        -e "s|@OPENMP_CFLAGS@|${E_CFLAGS}|" \
+        -e "s|@OPENMP_LIBS@|${E_LIBS}|" \
+        src/Makevars.in > src/Makevars.new || ! test -s src/Makevars.new; then
+    rm -f src/Makevars.new
+    echo "configure: could not write src/Makevars" >&2
+    exit 1
+fi
+
+# make does not track src/Makevars, so objects compiled with different flags
+# (for example by an earlier build without OpenMP in this source directory)
+# would be reused. Remove them whenever the flags change.
+if test -f src/Makevars && cmp -s src/Makevars.new src/Makevars; then
+    rm -f src/Makevars.new
+else
+    rm -f src/*.o src/*.so src/libBigWig/*.o
+    mv src/Makevars.new src/Makevars
+fi
+
+exit 0

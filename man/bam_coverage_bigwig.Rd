@@ -21,11 +21,13 @@ bam_coverage_bigwig(
 \item{file}{A BAM file path, \link[Rsamtools:BamFile]{Rsamtools::BamFile}, or a vector / \code{BamFileList}
 of them.}
 
-\item{outfile}{Output bigWig path(s); must have the same length as \code{file}.}
+\item{outfile}{Output bigWig path(s); must have the same length as \code{file},
+with no path repeated.}
 
 \item{param}{Optional \link[Rsamtools:ScanBamParam]{Rsamtools::ScanBamParam} (or a compatible list). Only its
 \code{flag} and \code{mapqFilter} are honoured, applied per read in C++. With the default
-\code{NULL} the filter matches \code{readGAlignments()} (drop only unmapped reads).}
+\code{NULL} the filter matches \code{readGAlignments()} (drop only unmapped reads).
+\code{which} (region) restriction is not applied; setting it gives a warning.}
 
 \item{threads}{Number of OpenMP threads for within-file decoding.}
 

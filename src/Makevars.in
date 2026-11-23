@@ -1,10 +1,11 @@
 CXX_STD = CXX17
 # -DNOCURL builds vendored libBigWig for local files only (no libcurl dependency).
 PKG_CPPFLAGS = -DNOCURL
-PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS)
+# OpenMP flags are chosen by ./configure (see the comments there for macOS).
+PKG_CXXFLAGS = @OPENMP_CXXFLAGS@
 # The vendored libBigWig writer uses OpenMP for parallel block compression.
-PKG_CFLAGS = $(SHLIB_OPENMP_CFLAGS)
-PKG_LIBS = -lz $(SHLIB_OPENMP_CXXFLAGS)
+PKG_CFLAGS = @OPENMP_CFLAGS@
+PKG_LIBS = -lz @OPENMP_LIBS@
 
 # Explicit object list so the vendored libBigWig sources in src/libBigWig/ are
 # compiled and linked (R only auto-globs the top level of src/).

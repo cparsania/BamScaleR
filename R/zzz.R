@@ -1,7 +1,7 @@
 #' @keywords internal
 #' @useDynLib BamScaleR, .registration = TRUE
 #' @import methods
-#' @importFrom BiocParallel bplapply bpnworkers bpworkers bpparam
+#' @importFrom BiocParallel bplapply bpnworkers bpparam
 #' @importFrom BiocGenerics path unlist
 #' @importFrom Rcpp evalCpp
 "_PACKAGE"

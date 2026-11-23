@@ -20,7 +20,7 @@
 # Usage:
 #   Rscript inst/benchmarks/download_atac_data.R \
 #     --experiment=ENCSRxxxxxxx --assembly=GRCh38 --output-type=alignments \
-#     --dest=/spectrum/GSCT/chiragp/018_BamScaleR/atac_bams --max-files=8
+#     --dest=/path/to/atac_bams --max-files=8
 
 suppressWarnings(suppressMessages(ok <- requireNamespace("Rsamtools", quietly = TRUE)))
 if (!ok) stop("Rsamtools is required.")

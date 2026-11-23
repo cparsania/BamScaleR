@@ -1,0 +1,5 @@
+#!/bin/sh
+# Windows builds use src/Makevars.win, which needs no configuration. This file
+# exists so that R CMD INSTALL on Windows does not warn that the package has a
+# (Unix) configure script needing manual configuration.
+exit 0

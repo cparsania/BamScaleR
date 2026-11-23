@@ -23,6 +23,12 @@ int bwCompressLevel = -1;
 // order at the same offsets. Single-writer assumption (one bigWig at a time).
 int bwsParallel = 0;
 int bwsVerbose = 0;   /* BamScaleR: print bwFinalize phase timings when != 0 */
+/* BamScaleR: OpenMP threads for parallel block compression; set by the caller
+ * from its `threads` argument so the writer never uses more threads than that. */
+int bwsThreads = 1;
+/* BamScaleR: the bwAddInterval and bwAppendInterval functions return an error
+ * when a flush inside their loops fails (upstream ignored it, so a failed
+ * write, e.g. a full disk, overran the write buffer). */
 
 // BamScaleR: in-memory coverage runs for building zoom levels without re-reading
 // (and re-decompressing) the just-written data. When registered, constructZoomLevels
@@ -362,7 +368,7 @@ static int bwsWriteBlocks(bigWigFile_t *fp, unsigned char **src, uLongf *srcLen,
     for(i = 0; i < n; i++) { dst[i] = malloc(bound); if(!dst[i]) err = 1; }
     if(!err) {
 #ifdef _OPENMP
-        #pragma omp parallel for schedule(dynamic, 32)
+        #pragma omp parallel for num_threads(bwsThreads > 1 ? bwsThreads : 1) schedule(dynamic, 32)
 #endif
         for(long long j = 0; j < (long long)n; j++) {
             uLongf sz = bound;
@@ -550,7 +556,7 @@ int bwAddIntervals(bigWigFile_t *fp, const char* const* chrom, const uint32_t *s
     for(i=1; i<n; i++) {
         if(strcmp(chrom[i],lastChrom) != 0) {
             wb->end = end[i-1];
-            flushBuffer(fp);
+            if(flushBuffer(fp)) return 14;
             lastChrom = chrom[i];
             tid = bwGetTid(fp, chrom[i]);
             if(tid == (uint32_t) -1) return 10;
@@ -559,7 +565,7 @@ int bwAddIntervals(bigWigFile_t *fp, const char* const* chrom, const uint32_t *s
         }
         if(wb->l+12 > fp->hdr->bufSize) { //12 bytes/entry
             wb->end = end[i-1];
-            flushBuffer(fp);
+            if(flushBuffer(fp)) return 14;
             wb->start = start[i];
         }
         if(!memcpy((char*)wb->p+wb->l, &(start[i]), sizeof(uint32_t))) return 11;
@@ -586,7 +592,7 @@ int bwAppendIntervals(bigWigFile_t *fp, const uint32_t *start, const uint32_t *e
             if(i>0) { //otherwise it's already set
                 wb->end = end[i-1];
             }
-            flushBuffer(fp);
+            if(flushBuffer(fp)) return 14;
             wb->start = start[i];
         }
         if(!memcpy((char*)wb->p+wb->l, &(start[i]), sizeof(uint32_t))) return 4;
@@ -621,7 +627,7 @@ int bwAddIntervalSpans(bigWigFile_t *fp, const char *chrom, const uint32_t *star
     for(i=0; i<n; i++) {
         if(wb->l + 8 >= fp->hdr->bufSize) { //8 bytes/entry
             if(i) wb->end = start[i-1]+span;
-            flushBuffer(fp);
+            if(flushBuffer(fp)) return 14;
             wb->start = start[i];
         }
         if(!memcpy((char*)wb->p+wb->l, &(start[i]), sizeof(uint32_t))) return 5;
@@ -645,7 +651,7 @@ int bwAppendIntervalSpans(bigWigFile_t *fp, const uint32_t *start, const float *
     for(i=0; i<n; i++) {
         if(wb->l + 8 >= fp->hdr->bufSize) {
             if(i) wb->end = start[i-1]+wb->span;
-            flushBuffer(fp);
+            if(flushBuffer(fp)) return 14;
             wb->start = start[i];
         }
         if(!memcpy((char*)wb->p+wb->l, &(start[i]), sizeof(uint32_t))) return 4;
@@ -665,7 +671,7 @@ int bwAddIntervalSpanSteps(bigWigFile_t *fp, const char *chrom, uint32_t start, 
     if(!n) return 0;
     if(!fp->isWrite) return 1;
     if(!wb) return 2;
-    if(wb->ltype != 3) flushBuffer(fp);
+    if(wb->ltype != 3) if(flushBuffer(fp)) return 3;
     if(flushBuffer(fp)) return 3;
 
     tid = bwGetTid(fp, chrom);
@@ -679,7 +685,7 @@ int bwAddIntervalSpanSteps(bigWigFile_t *fp, const char *chrom, uint32_t start, 
     for(i=0; i<n; i++) {
         if(wb->l + 4 >= fp->hdr->bufSize) {
             wb->end = wb->start + ((wb->l-24)>>2) * step;
-            flushBuffer(fp);
+            if(flushBuffer(fp)) return 14;
             wb->start = wb->end;
         }
         if(!memcpy((char*)wb->p+wb->l, &(values[i]), sizeof(float))) return 5;
@@ -702,7 +708,7 @@ int bwAppendIntervalSpanSteps(bigWigFile_t *fp, const float *values, uint32_t n)
     for(i=0; i<n; i++) {
         if(wb->l + 4 >= fp->hdr->bufSize) {
             wb->end = wb->start + ((wb->l-24)>>2) * wb->step;
-            flushBuffer(fp);
+            if(flushBuffer(fp)) return 14;
             wb->start = wb->end;
         }
         if(!memcpy((char*)wb->p+wb->l, &(values[i]), sizeof(float))) return 4;
@@ -1426,6 +1432,8 @@ int bwFinalize(bigWigFile_t *fp) {
     uint32_t four;
     uint64_t offset;
     if(!fp->isWrite) return 0;
+    //BamScaleR: a writer that was never fully opened has nothing to finalize.
+    if(!fp->URL || !fp->writeBuffer) return 1;
 
     //Flush the buffer
     if(flushBuffer(fp)) return 1; //Valgrind reports a problem here!

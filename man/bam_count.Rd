@@ -40,6 +40,9 @@ For multiple files: named list of such \code{data.frame}s.
 \description{
 \code{bam_count()} provides a fast chromosome-level count summary, honoring key
 filtering fields from \code{ScanBamParam} (\code{mapqFilter}, \code{flag}, and \code{which}).
+With \code{which}, a record is counted once if its alignment overlaps any of the
+ranges (\code{Rsamtools::countBam()} counts it once per overlapping range), and
+unmapped records are not counted, so the \code{*} row is 0.
 }
 \details{
 Parallelism behavior matches \code{bam_read()}: \code{BPPARAM} distributes work across

@@ -39,7 +39,9 @@
 #' - a `Rsamtools::BamFileList`.
 #' @param param Optional `Rsamtools::ScanBamParam` (or a compatible list for
 #'   lightweight use). The following fields are honored:
-#'   `mapqFilter`, `flag`, `which`, `what`, and `tag`.
+#'   `mapqFilter`, `flag`, `which`, `what`, and `tag`. `tagFilter`,
+#'   `simpleCigar` and `reverseComplement` are not supported; setting them
+#'   gives a warning and they are ignored.
 #' @param what Character vector of fields to return, similar to
 #'   `scanBam(what=...)`. Supported fields are
 #'   `qname`, `flag`, `rname`, `strand`, `pos`, `qwidth`, `mapq`, `cigar`,
@@ -53,8 +55,11 @@
 #' - `"scanBam"`: returns a `scanBam()`-shaped list-of-lists.
 #' @param seqqual_mode Controls representation of `seq`/`qual` when those
 #'   fields are requested:
-#' - `"compatible"` (default): return character vectors matching
-#'   `scanBam`-style expectations,
+#' - `"compatible"` (default): return `seq` and `qual` as
+#'   `Biostrings::DNAStringSet` and `Biostrings::PhredQuality` objects,
+#'   identical to those from `Rsamtools::scanBam()`. These are best held in a
+#'   `DataFrame` (`as = "DataFrame"`); a base `data.frame` can carry them but
+#'   cannot print them,
 #' - `"compact"`: return lower-level raw list-columns for faster/lower-overhead
 #'   extraction. In compact mode, `seq` is returned as one `raw` vector per read
 #'   containing BAM-native packed sequence bytes (two bases per byte), and
@@ -64,18 +69,25 @@
 #'   missing quality values. This mode is currently supported for
 #'   `as = "data.frame"` or `as = "DataFrame"`.
 #' @param threads Requested number of OpenMP threads used for
-#'   reading/decompression. May be capped when `auto_threads = TRUE`.
+#'   reading/decompression. May be capped when `auto_threads = TRUE`. Values
+#'   above 1 require a build with OpenMP (see the Installation section of
+#'   `vignette("BamScaleR-intro")`); without it a warning is issued once per
+#'   session and each file is read on one thread.
 #' @param BPPARAM `BiocParallel` parameter used when `file` contains
 #'   more than one BAM. Defaults to `BiocParallel::bpparam()`. Set to `NULL`
-#'   to force serial file processing.
+#'   to force serial file processing. The object is used as supplied and is
+#'   never modified, so it can be reused afterwards; an already-started
+#'   cluster stays running with its configured number of workers.
 #' @param auto_threads Logical; when `TRUE` and `BPPARAM` has multiple workers,
 #'   BamScaleR adaptively avoids oversubscription by preserving higher
 #'   per-file OpenMP thread counts when possible and reducing the number of
 #'   concurrently active file workers before shrinking per-file threads.
 #' @param use.names Passed to alignment object conversion. When `TRUE`, read names
-#'   (`qname`) are used as object names.
+#'   (`qname`) are used as object names (they are read for this even when
+#'   `what` does not include `"qname"`).
 #' @param with.which_label Logical; if `TRUE` and `param` includes `which`,
-#'   an extra `which_label` column is returned.
+#'   an extra `which_label` column is returned. It is a character column (or
+#'   mcol), where `readGAlignments()` returns a factor `Rle`.
 #' @param include_unmapped Logical; whether unmapped records are retained
 #'   (subject to `param$flag` constraints).
 #'
@@ -86,8 +98,8 @@
 #'
 #' @details
 #' `bam_read()` is intentionally column-compatible with common BAM fields used by
-#' Bioconductor workflows and can be used as a fast drop-in reader before
-#' conversion to downstream classes.
+#' Bioconductor workflows and can be used in place of `Rsamtools::scanBam()`
+#' for the supported fields and settings; the differences are listed below.
 #'
 #' Parallelism model:
 #' - `BPPARAM` parallelizes across files (one file per BiocParallel worker).
@@ -98,15 +110,42 @@
 #'   first limits the number of concurrently active workers to preserve the
 #'   requested per-file thread count within the detected core budget, then
 #'   caps per-file OpenMP threads only if a single file would still
-#'   oversubscribe the machine.
+#'   oversubscribe the machine. `BPPARAM` itself is never changed. A
+#'   `MulticoreParam` that is not running is replaced by a copy with fewer
+#'   workers; a `SnowParam` that is not running is started with only the
+#'   workers needed (also when there are fewer files than workers) and
+#'   stopped again afterwards. For a running cluster, or another kind of
+#'   `BPPARAM`, the files are grouped into that many `bplapply()` tasks; an
+#'   error then stops its whole group, and `BiocParallel::bptry()` returns
+#'   one result per group rather than per file.
+#' - GCC's OpenMP runtime (the usual one on Linux) cannot start threads in a
+#'   process created by `fork()` once its parent has used OpenMP threads, and
+#'   such a forked worker (`BiocParallel::MulticoreParam`) would wait forever.
+#'   BamScaleR therefore releases the runtime's idle threads just before each
+#'   `fork()` in the session, so forked workers can use `threads` as
+#'   requested, whichever package used OpenMP first. (This may also discard
+#'   other libraries' OpenMP thread-private data.) With an OpenMP runtime
+#'   too old to support this (GCC's libgomp before version 9), a worker forked
+#'   after BamScaleR has used several threads reads on one thread, and a
+#'   worker forked after another package used OpenMP threads can still hang;
+#'   use `BiocParallel::SnowParam()` (type `"SOCK"`) there.
 #'
 #' Compatibility notes:
 #' - `rname`, `mrnm`, and `strand` are returned as `factor` columns, matching
 #'   `Rsamtools::scanBam()`. `rname`/`mrnm` levels are the BAM header reference
 #'   names; unmapped or unset references are `NA` (not `"*"`). `strand` has
 #'   levels `c("+", "-", "*")`.
-#' - Region filtering via `param$which` is supported as a sequential filter
-#'   (not index-jump random access).
+#' - Region filtering via `param$which` is a sequential filter (the whole file
+#'   is read; the BAM index is not used). As in `Rsamtools`, a record is kept
+#'   when its alignment overlaps a range. Unlike `Rsamtools`, a record that
+#'   overlaps several ranges is returned once, labelled with the first of
+#'   them; records come in file order rather than grouped by range; and
+#'   unmapped records are not returned when `which` is set. As in
+#'   `Rsamtools`, a zero-width range selects nothing, and a range on a
+#'   sequence that is not in the BAM header is an error. Repeated range labels
+#'   are made unique with `make.unique()`, one batch per range; a range given
+#'   twice therefore gets an empty second batch, where `scanBam()` repeats
+#'   the records.
 #' - Flag filtering uses `ScanBamFlag` semantics by converting logical flag
 #'   requirements into required-set and required-unset bit masks.
 #' - Tag values are returned with their native BAM-derived type, matching
@@ -124,6 +163,30 @@
 #'   `decode_compact_qual()`, or `decode_seqqual_compact()` to decode compact
 #'   output back to standard string form when needed.
 #' - `"GAlignments"` and `"GAlignmentPairs"` output exclude unmapped records.
+#' - For plain `as = "GAlignments"` requests (no `which`, tags, `seq` or
+#'   `qual`), the object is assembled from slots built in C++. Every invariant
+#'   checked by the `GAlignments` validity method holds by construction, except
+#'   for two kinds of record that the reader counts: a CIGAR with an op code
+#'   above 8 or a zero-length op (which the validity method may reject), and
+#'   an alignment that extends outside its sequence. If either occurs,
+#'   `methods::validObject()` is run on the result, so an invalid object is
+#'   never returned and out-of-bound alignments give the same warning as
+#'   `GenomicAlignments::readGAlignments()`. Set
+#'   `options(BamScaleR.ga_fastpath = FALSE)` to always use the validating
+#'   `GAlignments` constructor instead.
+#' - For `as = "GAlignmentPairs"`, mates are matched by
+#'   `GenomicAlignments::makeGAlignmentPairs()`, on the read name, each
+#'   record's position against its mate's `mrnm`/`mpos`, the strand,
+#'   first/last, proper-pair and secondary flags. Without `which`, the result contains the
+#'   same pairs as `GenomicAlignments::readGAlignmentPairs()`, ordered by the
+#'   position of the first mate (pairs whose first mates start at the same
+#'   position may come in a different order). With `which`, records are
+#'   filtered before pairing, so only pairs with both mates in the ranges are
+#'   returned, each once, whereas `readGAlignmentPairs()` returns every pair
+#'   with at least one mate in a range. Ambiguous mates are dropped, and
+#'   `BamFile` read-name options (`qnamePrefixEnd`, `qnameSuffixStart`) are not
+#'   used. The mates' mcols hold the requested `what` fields and tags that are
+#'   not alignment slots, as for `as = "GAlignments"`.
 #' - `as = "scanBam"` returns a strict scan-like list-of-lists:
 #'   without `param$which`, it returns one unnamed batch; with `param$which`,
 #'   it returns one batch per range label (including empty ranges), with
@@ -197,7 +260,8 @@ bam_read <- function(
     tag_final <- tag_final[nzchar(tag_final)]
 
     split_scan_by_which <- identical(as, "scanBam") && nrow(parsed$which) > 0L
-    internal_with_which_label <- isTRUE(with.which_label) || split_scan_by_which
+    internal_with_which_label <- (isTRUE(with.which_label) && nrow(parsed$which) > 0L) ||
+        split_scan_by_which
     internal_include_unmapped <- isTRUE(include_unmapped) && !as %in% c("GAlignments", "GAlignmentPairs")
 
     needed_fields <- unique(what_final)
@@ -205,7 +269,11 @@ bam_read <- function(
         needed_fields <- unique(c(needed_fields, "rname", "pos", "cigar", "strand"))
     }
     if (as == "GAlignmentPairs") {
-        needed_fields <- unique(c(needed_fields, "qname", "flag"))
+        needed_fields <- unique(c(needed_fields, "qname", "flag", "mrnm", "mpos"))
+    }
+    if (isTRUE(use.names) && as %in% c("GAlignments", "GAlignmentPairs")) {
+        # Read names are needed for the names, even when `what` lacks "qname".
+        needed_fields <- unique(c(needed_fields, "qname"))
     }
 
     include_seq <- "seq" %in% needed_fields
@@ -273,7 +341,7 @@ bam_read <- function(
             keep <- unique(c(keep, "rname", "pos", "cigar", "strand"))
         }
         if (as == "GAlignmentPairs") {
-            keep <- unique(c(keep, "qname", "flag"))
+            keep <- unique(c(keep, "qname", "flag", "mrnm", "mpos"))
         }
         if (isTRUE(internal_with_which_label)) {
             keep <- unique(c(keep, "which_label"))
@@ -311,6 +379,9 @@ bam_read <- function(
 #'
 #' `bam_count()` provides a fast chromosome-level count summary, honoring key
 #' filtering fields from `ScanBamParam` (`mapqFilter`, `flag`, and `which`).
+#' With `which`, a record is counted once if its alignment overlaps any of the
+#' ranges (`Rsamtools::countBam()` counts it once per overlapping range), and
+#' unmapped records are not counted, so the `*` row is 0.
 #'
 #' @param file BAM input (`character`, `BamFile`, or `BamFileList`).
 #' @param param Optional `Rsamtools::ScanBamParam` (or compatible list).
@@ -397,7 +468,9 @@ bam_count <- function(
 #' @param file A BAM file path, [Rsamtools::BamFile], or a vector / `BamFileList`
 #'   of them.
 #' @param param Optional [Rsamtools::ScanBamParam] (or a compatible list). Only
-#'   its `flag` and `mapqFilter` are honoured, applied per read in C++ -- e.g.
+#'   its `flag` and `mapqFilter` are honoured, applied per read in C++ (other
+#'   settings that would change the result, such as `which`, give a warning)
+#'   -- e.g.
 #'   `Rsamtools::ScanBamParam(flag = Rsamtools::scanBamFlag(
 #'   isSecondaryAlignment = FALSE, isUnmappedQuery = FALSE,
 #'   isNotPassingQualityControls = FALSE))` to reproduce the standard ATAC
@@ -409,11 +482,11 @@ bam_count <- function(
 #' @param max_fragment Integer; fragment sizes up to this value are tallied in a
 #'   dense histogram and larger ones in an overflow map. Every observed size is
 #'   returned exactly regardless of this value (default `1e5`).
-#' @param drop_mate_unmapped Logical; if `TRUE` (default), reads whose mate is
-#'   unmapped (SAM flag `0x8`) are excluded -- matching `Rsamtools::scanBam`,
-#'   which reports their `isize` as `NA` (no defined template length), so that
-#'   `table(abs(isize))` drops them. Set `FALSE` to tally `abs(TLEN)` over all
-#'   flag-passing reads.
+#' @param drop_mate_unmapped Logical; if `TRUE` (default), reads that are
+#'   unmapped or whose mate is unmapped (SAM flags `0x4`, `0x8`) are excluded --
+#'   matching `Rsamtools::scanBam`, which reports their `isize` as `NA` (no
+#'   defined template length), so that `table(abs(isize))` drops them. Set
+#'   `FALSE` to tally `abs(TLEN)` over all flag-passing reads.
 #'
 #' @return A `data.frame` with columns `fragment_size` (integer `abs(TLEN)`) and
 #'   `count` (numeric), one row per observed fragment size in ascending order.
@@ -446,7 +519,7 @@ fragment_sizes <- function(
         n_files = length(files)
     )
     threads <- parallel_plan$threads
-    parsed <- .bamscale_parse_param(param)
+    parsed <- .bamscale_parse_param(param, supports_which = FALSE)
 
     worker <- function(path_one) {
         .Call(
@@ -482,8 +555,11 @@ fragment_sizes <- function(
 #' @param file A BAM file path, [Rsamtools::BamFile], or a vector / `BamFileList`
 #'   of them.
 #' @param param Optional [Rsamtools::ScanBamParam] (or a compatible list). Only
-#'   its `flag` and `mapqFilter` are honoured, applied per read in C++. Note that
-#'   a non-zero `mapqFilter` removes reads below that MAPQ from the distribution.
+#'   its `flag` and `mapqFilter` are honoured, applied per read in C++ (other
+#'   settings that would change the result, such as `which`, give a warning).
+#'   Note that a non-zero `mapqFilter` removes reads below that MAPQ from the
+#'   distribution. Unmapped reads (SAM flag `0x4`) have no mapping quality --
+#'   `Rsamtools::scanBam()` reports `NA` for them -- and are never counted.
 #' @param threads Number of OpenMP threads for within-file decoding.
 #' @param BPPARAM A [BiocParallel::BiocParallelParam] for across-file parallelism
 #'   when `file` has more than one element.
@@ -518,7 +594,7 @@ mapq_dist <- function(
         n_files = length(files)
     )
     threads <- parallel_plan$threads
-    parsed <- .bamscale_parse_param(param)
+    parsed <- .bamscale_parse_param(param, supports_which = FALSE)
 
     worker <- function(path_one) {
         .Call(
@@ -577,8 +653,8 @@ mapq_dist <- function(
 #'   of them.
 #' @param param Optional [Rsamtools::ScanBamParam] (or a compatible list). Only its
 #'   `flag` and `mapqFilter` are honoured, applied per read in C++. With the default
-#'   `NULL` the filter matches `readGAlignments()` (drop only unmapped reads). Note
-#'   that `which` (region) restriction is not applied.
+#'   `NULL` the filter matches `readGAlignments()` (drop only unmapped reads).
+#'   `which` (region) restriction is not applied; setting it gives a warning.
 #' @param threads Number of OpenMP threads for within-file decoding.
 #' @param BPPARAM A [BiocParallel::BiocParallelParam] for across-file parallelism
 #'   when `file` has more than one element.
@@ -613,7 +689,7 @@ bam_coverage <- function(
         n_files = length(files)
     )
     threads <- parallel_plan$threads
-    parsed <- .bamscale_parse_param(param)
+    parsed <- .bamscale_parse_param(param, supports_which = FALSE)
 
     worker <- function(path_one) {
         raw <- .Call(
@@ -654,10 +730,12 @@ bam_coverage <- function(
 #'
 #' @param file A BAM file path, [Rsamtools::BamFile], or a vector / `BamFileList`
 #'   of them.
-#' @param outfile Output bigWig path(s); must have the same length as `file`.
+#' @param outfile Output bigWig path(s); must have the same length as `file`,
+#'   with no path repeated.
 #' @param param Optional [Rsamtools::ScanBamParam] (or a compatible list). Only its
 #'   `flag` and `mapqFilter` are honoured, applied per read in C++. With the default
 #'   `NULL` the filter matches `readGAlignments()` (drop only unmapped reads).
+#'   `which` (region) restriction is not applied; setting it gives a warning.
 #' @param threads Number of OpenMP threads for within-file decoding.
 #' @param BPPARAM A [BiocParallel::BiocParallelParam] for across-file parallelism
 #'   when `file` has more than one element.
@@ -704,6 +782,40 @@ bam_coverage_bigwig <- function(
     if (length(outfile) != length(files)) {
         stop("`outfile` must have the same length as `file`", call. = FALSE)
     }
+    if (anyNA(outfile) || any(!nzchar(outfile))) {
+        stop("`outfile` must contain non-empty paths", call. = FALSE)
+    }
+    # A trailing separator names a directory, existing or not.
+    ends_sep <- grepl("[/\\\\]$", outfile)
+    if (any(ends_sep)) {
+        stop("`outfile` is a directory: ",
+             paste(outfile[ends_sep], collapse = ", "), call. = FALSE)
+    }
+    # Check the output paths before any work, on their full form: links
+    # followed, '~' expanded, absolute. The workers write to the full paths, so
+    # a worker in another working directory writes where the caller expects.
+    out_full <- .bamscale_full_path(outfile)
+    out_dir <- dirname(out_full)
+    bad_dir <- !dir.exists(out_dir) | file.access(out_dir, 2L) != 0L
+    if (any(bad_dir)) {
+        stop("cannot write to the directory of `outfile`: ",
+             paste(unique(out_dir[bad_dir]), collapse = ", "), call. = FALSE)
+    }
+    if (any(dir.exists(out_full))) {
+        stop("`outfile` is a directory: ",
+             paste(outfile[dir.exists(out_full)], collapse = ", "), call. = FALSE)
+    }
+    not_writable <- file.exists(out_full) & file.access(out_full, 2L) != 0L
+    if (any(not_writable)) {
+        stop("`outfile` cannot be overwritten: ",
+             paste(outfile[not_writable], collapse = ", "), call. = FALSE)
+    }
+    if (anyDuplicated(out_full) > 0L) {
+        stop("`outfile` paths must be unique", call. = FALSE)
+    }
+    if (any(out_full %in% .bamscale_full_path(unname(files)))) {
+        stop("`outfile` must not be one of the input BAM files", call. = FALSE)
+    }
     parallel_plan <- .bamscale_resolve_parallel_plan(
         threads = threads,
         BPPARAM = BPPARAM,
@@ -711,13 +823,13 @@ bam_coverage_bigwig <- function(
         n_files = length(files)
     )
     threads <- parallel_plan$threads
-    parsed <- .bamscale_parse_param(param)
+    parsed <- .bamscale_parse_param(param, supports_which = FALSE)
 
     worker <- function(i) {
         .Call(
             `_BamScaleR_bam_coverage_bigwig_cpp`,
             files[[i]],
-            outfile[[i]],
+            out_full[[i]],
             threads,
             as.integer(parsed$min_mapq),
             as.integer(parsed$flag_set),
@@ -737,7 +849,31 @@ bam_coverage_bigwig <- function(
         BPPARAM = BPPARAM,
         bp_workers = parallel_plan$bp_workers
     )
+    # Return the paths as the caller gave them.
+    if (length(files) == 1L) {
+        paths <- outfile[[1L]]
+    } else {
+        paths[] <- as.list(outfile)
+    }
     invisible(paths)
+}
+
+# Full form of a path for comparison and for workers: '~' expanded, symbolic
+# links followed (also dangling ones, which normalizePath() leaves alone), and
+# absolute.
+.bamscale_full_path <- function(p) {
+    vapply(path.expand(as.character(p)), function(q) {
+        for (hop in seq_len(40L)) {
+            link <- Sys.readlink(q)  # NA if q does not exist, "" if not a link
+            if (is.na(link) || !nzchar(link)) break
+            q <- if (grepl("^(/|[A-Za-z]:)", link)) link else file.path(dirname(q), link)
+        }
+        if (file.exists(q)) {
+            normalizePath(q, winslash = "/", mustWork = FALSE)
+        } else {
+            file.path(normalizePath(dirname(q), winslash = "/", mustWork = FALSE), basename(q))
+        }
+    }, character(1), USE.NAMES = FALSE)
 }
 
 #' Decode compact BamScaleR sequence output
@@ -780,8 +916,9 @@ decode_compact_seq <- function(seq, qwidth) {
 #'   BamScaleR quality extraction.
 #'
 #' @return A character vector containing decoded quality strings. Entries with
-#'   all-missing quality bytes are returned as `"*"`, matching BamScaleR's
-#'   compatibility mode.
+#'   all-missing quality bytes (value 255) are returned as `"*"`, the SAM
+#'   notation for a missing quality. (The compatible mode of `bam_read()`
+#'   instead returns `Rsamtools::scanBam()`'s `PhredQuality` for such reads.)
 #'
 #' @seealso [decode_compact_seq()], [decode_seqqual_compact()], [bam_read()]
 #'
@@ -919,10 +1056,37 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
     workers
 }
 
+.bamscale_state <- new.env(parent = emptyenv())
+
+# Warn once per session when `threads` > 1 is requested but the package was
+# built without OpenMP (see ./configure; typically a macOS toolchain without
+# libomp), in which case every BAM is processed on a single thread.
+.bamscale_warn_if_no_openmp <- function(threads) {
+    if (threads > 1L && !isTRUE(.bamscale_state$warned_no_openmp) &&
+        identical(openmp_max_threads_cpp(), 0L)) {
+        .bamscale_state$warned_no_openmp <- TRUE
+        warning(
+            "BamScaleR was built without OpenMP, so `threads` > 1 has no ",
+            "effect and each BAM is read on a single thread. See the ",
+            "'Installation' section of vignette(\"BamScaleR-intro\") to enable ",
+            "multithreading. (BPPARAM parallelism across files is unaffected.)",
+            call. = FALSE
+        )
+    }
+    invisible(NULL)
+}
+
 .bamscale_resolve_parallel_plan <- function(threads, BPPARAM = NULL, auto_threads = FALSE, n_files = 1L) {
     threads <- as.integer(threads)
     if (length(threads) != 1L || is.na(threads) || threads < 1L) {
         stop("`threads` must be a positive integer", call. = FALSE)
+    }
+    .bamscale_warn_if_no_openmp(threads)
+    # Without OpenMP each file is read on one thread whatever `threads` says;
+    # plan with that, so auto_threads does not give up BiocParallel workers to
+    # make room for threads that will never run.
+    if (identical(openmp_max_threads_cpp(), 0L)) {
+        threads <- 1L
     }
 
     if (length(auto_threads) != 1L || is.na(auto_threads)) {
@@ -969,25 +1133,103 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
     as.integer(mask)
 }
 
+# Process the files selected by `idx` one after another inside one
+# BiocParallel task. bplapply() reports only the index of the failing task,
+# so an error is re-raised with the index and name of the file. (`file_fun`,
+# not `FUN`, so the argument cannot be captured by bplapply's own `FUN`
+# formal.)
+.bamscale_run_file_group <- function(idx, files, file_fun) {
+    lapply(idx, function(i) {
+        tryCatch(
+            file_fun(files[[i]]),
+            error = function(e) {
+                label <- names(files)[i]
+                if (is.null(label) || is.na(label) || !nzchar(label)) {
+                    label <- as.character(files[[i]])
+                }
+                stop(
+                    sprintf("file %d (%s): %s", i, label, conditionMessage(e)),
+                    call. = FALSE
+                )
+            }
+        )
+    })
+}
+
+# Apply FUN to each file, using at most `bp_workers` concurrent BiocParallel
+# workers. The caller's BPPARAM is never modified: BiocParallelParam objects
+# have reference semantics, so resizing it (bpworkers<-) would change the
+# user's object for later calls and, for an already-started cluster, leave its
+# reported worker count out of step with the running workers.
+#
+# The files are passed to bplapply() directly, so BiocParallel's own task
+# settings apply, except under a cap (`bp_workers` below both the worker count
+# and the number of files; auto_threads = TRUE can ask for one):
+# - a MulticoreParam that is not running is replaced by a copy resized to
+#   `bp_workers` workers;
+# - a SnowParam that is not running is started with only the workers needed
+#   (also without a cap, when there are fewer files than workers) and stopped
+#   again on exit;
+# - otherwise (a running cluster, or another kind of BPPARAM) the files are
+#   split into `bp_workers` groups and each task processes its group in turn;
+#   an error then stops its group, and bptry() returns per-group results.
 .bamscale_apply_files <- function(files, FUN, BPPARAM = NULL, bp_workers = NULL) {
+    n_files <- length(files)
+    workers_target <- 1L
+    n_bp <- 1L
     if (!is.null(BPPARAM)) {
+        n_bp <- .bamscale_bpparam_workers(BPPARAM)
         workers_target <- suppressWarnings(as.integer(bp_workers))
         if (length(workers_target) != 1L || is.na(workers_target) || workers_target < 1L) {
-            workers_target <- .bamscale_bpparam_workers(BPPARAM)
+            workers_target <- n_bp
+        }
+        workers_target <- min(workers_target, n_bp, n_files)
+    }
+
+    if (workers_target <= 1L) {
+        out <- lapply(files, FUN)
+    } else {
+        cap_needed <- workers_target < min(n_bp, n_files)
+        is_snow <- methods::is(BPPARAM, "SnowParam")
+        is_multicore <- methods::is(BPPARAM, "MulticoreParam")
+        # Use only `workers_target` workers of a param that is not running,
+        # without changing the caller's object:
+        # - a MulticoreParam (capped runs only) is replaced by a resized copy,
+        #   so BiocParallel keeps its fork-per-task path (with the default
+        #   bpfallback = TRUE), which needs no sockets and also works inside
+        #   forked workers;
+        # - a SnowParam would have every worker started by bplapply(), so start
+        #   only the ones needed, and stop them again on exit.
+        started_here <- FALSE
+        bp_use <- BPPARAM
+        if (is_snow && !BiocParallel::bpisup(BPPARAM) &&
+            workers_target < n_bp && (cap_needed || !is_multicore)) {
+            if (is_multicore) {
+                bp_use <- BPPARAM$copy()
+                BiocParallel::bpworkers(bp_use) <- workers_target
+            } else {
+                BiocParallel::bpstart(BPPARAM, lenX = workers_target)
+                on.exit(BiocParallel::bpstop(BPPARAM), add = TRUE)
+            }
+            started_here <- TRUE
         }
 
-        if (workers_target <= 1L) {
-            out <- lapply(files, FUN)
-        } else {
-            bp <- BPPARAM
-            current_workers <- .bamscale_bpparam_workers(bp)
-            if (workers_target < current_workers) {
-                BiocParallel::bpworkers(bp) <- workers_target
+        if (cap_needed && !started_here) {
+            # Round-robin assignment keeps each task's share within one file
+            # of the others; results are put back in input order below.
+            groups <- split(seq_len(n_files), rep_len(seq_len(workers_target), n_files))
+            res <- BiocParallel::bplapply(
+                groups, .bamscale_run_file_group,
+                files = files, file_fun = FUN,
+                BPPARAM = BPPARAM
+            )
+            out <- vector("list", n_files)
+            for (g in seq_along(groups)) {
+                out[groups[[g]]] <- res[[g]]
             }
-            out <- BiocParallel::bplapply(files, FUN, BPPARAM = bp)
+        } else {
+            out <- BiocParallel::bplapply(files, FUN, BPPARAM = bp_use)
         }
-    } else {
-        out <- lapply(files, FUN)
     }
 
     if (length(files) == 1L) {
@@ -1009,14 +1251,17 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
         }
         nm <- names(file)
         if (is.null(nm)) nm <- basename(file)
+        file <- .bamscale_abs_path(file)
         names(file) <- nm
         return(file)
     }
 
     if (methods::is(file, "BamFile")) {
         p <- as.character(BiocGenerics::path(file))
-        names(p) <- if (!is.null(names(file)) && nzchar(names(file)[1L])) names(file)[1L] else basename(p)
+        nm <- if (!is.null(names(file)) && nzchar(names(file)[1L])) names(file)[1L] else basename(p)
         if (!file.exists(p)) stop("BAM file not found: ", p, call. = FALSE)
+        p <- .bamscale_abs_path(p)
+        names(p) <- nm
         return(p)
     }
 
@@ -1024,15 +1269,26 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
         p <- vapply(file, function(x) as.character(BiocGenerics::path(x)), FUN.VALUE = character(1))
         nm <- names(file)
         if (is.null(nm) || any(!nzchar(nm))) nm <- basename(p)
-        names(p) <- nm
         if (any(!file.exists(p))) {
             missing <- p[!file.exists(p)]
             stop("BAM file(s) not found: ", paste(missing, collapse = ", "), call. = FALSE)
         }
+        p <- .bamscale_abs_path(p)
+        names(p) <- nm
         return(p)
     }
 
     stop("`file` must be character, BamFile, or BamFileList", call. = FALSE)
+}
+
+# Absolute form of input paths: '~' expanded and relative paths prefixed with
+# the working directory, without following symbolic links. The C reader does
+# not expand '~', and a BiocParallel worker may run in another directory.
+.bamscale_abs_path <- function(p) {
+    p <- path.expand(as.character(p))
+    rel <- !grepl("^(/|\\\\|[A-Za-z]:)", p)
+    p[rel] <- file.path(getwd(), sub("^(\\./)+", "", p[rel]))
+    p
 }
 .bamscale_empty_which <- function() {
     data.frame(
@@ -1044,7 +1300,10 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
     )
 }
 
-.bamscale_parse_param <- function(param) {
+# `supports_which = FALSE` for the summary functions, which cannot restrict
+# to regions. Settings that would change the result but are not implemented
+# give a warning instead of being dropped silently.
+.bamscale_parse_param <- function(param, supports_which = TRUE) {
     out <- list(
         min_mapq = 0L,
         flag_set = 0L,
@@ -1059,20 +1318,33 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
     }
 
     if (is.list(param) && !methods::is(param, "ScanBamParam")) {
-        if (!is.null(param$mapqFilter)) out$min_mapq <- as.integer(param$mapqFilter)
-        if (!is.null(param$min_mapq)) out$min_mapq <- as.integer(param$min_mapq)
+        # Exact matching: `$` would partially match, so an unknown name such
+        # as `tagFilter` would be read as `tag`.
+        get <- function(nm) param[[nm, exact = TRUE]]
+        if (!is.null(get("mapqFilter"))) out$min_mapq <- as.integer(get("mapqFilter"))
+        if (!is.null(get("min_mapq"))) out$min_mapq <- as.integer(get("min_mapq"))
 
-        if (!is.null(param$flag_set)) out$flag_set <- as.integer(param$flag_set)
-        if (!is.null(param$flag_unset)) out$flag_unset <- as.integer(param$flag_unset)
-        if (!is.null(param$flag) && methods::is(param$flag, "ScanBamFlag")) {
-            masks <- .bamscale_scan_flag_masks(param$flag)
-            out$flag_set <- masks$set
-            out$flag_unset <- masks$unset
+        if (!is.null(get("flag_set"))) out$flag_set <- as.integer(get("flag_set"))
+        if (!is.null(get("flag_unset"))) out$flag_unset <- as.integer(get("flag_unset"))
+        if (!is.null(get("flag"))) {
+            # As in ScanBamParam(flag = ): the value of Rsamtools::scanBamFlag().
+            masks <- .bamscale_scan_flag_masks(
+                Rsamtools::bamFlag(Rsamtools::ScanBamParam(flag = get("flag")))
+            )
+            # Combined with any flag_set / flag_unset given alongside.
+            out$flag_set <- bitwOr(out$flag_set, masks$set)
+            out$flag_unset <- bitwOr(out$flag_unset, masks$unset)
         }
 
-        if (!is.null(param$what)) out$what <- as.character(param$what)
-        if (!is.null(param$tag)) out$tag <- as.character(param$tag)
-        if (!is.null(param$which)) out$which <- .bamscale_which_to_df(param$which)
+        if (!is.null(get("what"))) out$what <- as.character(get("what"))
+        if (!is.null(get("tag"))) out$tag <- as.character(get("tag"))
+        if (!is.null(get("which"))) out$which <- .bamscale_which_to_df(get("which"))
+        known <- c("mapqFilter", "min_mapq", "flag_set", "flag_unset", "flag",
+                   "what", "tag", "which")
+        nms <- names(param)
+        if (is.null(nms)) nms <- rep("", length(param))
+        nms[!nzchar(nms)] <- "(unnamed)"
+        .bamscale_warn_ignored_param(setdiff(nms, known), out, supports_which)
         return(out)
     }
 
@@ -1090,7 +1362,34 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
     out$flag_unset <- masks$unset
 
     out$which <- .bamscale_which_to_df(Rsamtools::bamWhich(param))
+
+    ignored <- character()
+    if (length(Rsamtools::bamTagFilter(param)) > 0L) {
+        ignored <- c(ignored, "tagFilter")
+    }
+    if (isTRUE(Rsamtools::bamSimpleCigar(param))) {
+        ignored <- c(ignored, "simpleCigar")
+    }
+    if (isTRUE(Rsamtools::bamReverseComplement(param))) {
+        ignored <- c(ignored, "reverseComplement")
+    }
+    .bamscale_warn_ignored_param(ignored, out, supports_which)
     out
+}
+
+.bamscale_warn_ignored_param <- function(ignored, parsed, supports_which) {
+    if (!isTRUE(supports_which) && nrow(parsed$which) > 0L) {
+        ignored <- c(ignored, "which")
+    }
+    if (length(ignored) > 0L) {
+        warning(
+            "`param` setting", if (length(ignored) > 1L) "s",
+            " not supported here, and ignored: ",
+            paste0("`", ignored, "`", collapse = ", "),
+            call. = FALSE
+        )
+    }
+    invisible(NULL)
 }
 
 .bamscale_scan_flag_masks <- function(flag_obj) {
@@ -1138,6 +1437,10 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
         if (!all(req %in% names(which_obj))) {
             stop("`which` data.frame must contain seqname/start/end columns", call. = FALSE)
         }
+        # No ranges at all means no restriction, as in Rsamtools.
+        if (nrow(which_obj) == 0L) {
+            return(.bamscale_empty_which())
+        }
         out <- data.frame(
             seqname = as.character(which_obj$seqname),
             start = as.integer(which_obj$start),
@@ -1145,47 +1448,51 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
             label = if ("label" %in% names(which_obj)) as.character(which_obj$label) else NA_character_,
             stringsAsFactors = FALSE
         )
-        missing_label <- is.na(out$label) | !nzchar(out$label)
-        out$label[missing_label] <- paste0(out$seqname[missing_label], ":", out$start[missing_label], "-", out$end[missing_label])
-        return(out)
-    }
-
-    if (methods::is(which_obj, "GenomicRanges")) {
-        seqname <- as.character(GenomicRanges::seqnames(which_obj))
-        start <- as.integer(IRanges::start(which_obj))
-        end <- as.integer(IRanges::end(which_obj))
+    } else if (methods::is(which_obj, "GenomicRanges")) {
         label <- names(which_obj)
-        if (is.null(label)) label <- rep(NA_character_, length(seqname))
-
+        if (is.null(label)) label <- rep(NA_character_, length(which_obj))
         out <- data.frame(
-            seqname = seqname,
-            start = start,
-            end = end,
+            seqname = as.character(GenomicRanges::seqnames(which_obj)),
+            start = as.integer(IRanges::start(which_obj)),
+            end = as.integer(IRanges::end(which_obj)),
             label = as.character(label),
             stringsAsFactors = FALSE
         )
-        missing_label <- is.na(out$label) | !nzchar(out$label)
-        out$label[missing_label] <- paste0(out$seqname[missing_label], ":", out$start[missing_label], "-", out$end[missing_label])
-        return(out)
-    }
-
-    if (methods::is(which_obj, "IntegerRangesList")) {
+    } else if (methods::is(which_obj, "IntegerRangesList")) {
+        n_per <- as.integer(IRanges::elementNROWS(which_obj))
+        if (sum(n_per) == 0L) {
+            return(.bamscale_empty_which())
+        }
+        nms <- names(which_obj)
+        if (is.null(nms) || any(is.na(nms[n_per > 0L]) | !nzchar(nms[n_per > 0L]))) {
+            stop("`which` ranges must be named by sequence (seqnames)", call. = FALSE)
+        }
         unlisted <- BiocGenerics::unlist(which_obj, use.names = FALSE)
-        seqname <- rep(names(which_obj), times = as.integer(IRanges::elementNROWS(which_obj)))
-        start <- as.integer(IRanges::start(unlisted))
-        end <- as.integer(IRanges::end(unlisted))
-        label <- paste0(seqname, ":", start, "-", end)
-
-        return(data.frame(
-            seqname = seqname,
-            start = start,
-            end = end,
-            label = label,
+        out <- data.frame(
+            seqname = rep(nms, times = n_per),
+            start = as.integer(IRanges::start(unlisted)),
+            end = as.integer(IRanges::end(unlisted)),
+            label = NA_character_,
             stringsAsFactors = FALSE
-        ))
+        )
+    } else {
+        stop("Unsupported `which` type. Use GRanges, IntegerRangesList, or data.frame", call. = FALSE)
     }
 
-    stop("Unsupported `which` type. Use GRanges, IntegerRangesList, or data.frame", call. = FALSE)
+    if (anyNA(out$seqname) || anyNA(out$start) || anyNA(out$end)) {
+        stop("`which` contains ranges with a missing sequence, start or end", call. = FALSE)
+    }
+    # As in IRanges: end >= start - 1 (end == start - 1 is a zero-width range).
+    if (any(out$end < out$start - 1L)) {
+        stop("`which` contains ranges whose end is less than start - 1", call. = FALSE)
+    }
+    missing_label <- is.na(out$label) | !nzchar(out$label)
+    out$label[missing_label] <- paste0(
+        out$seqname[missing_label], ":", out$start[missing_label], "-", out$end[missing_label]
+    )
+    # One batch / label per range, as in Rsamtools, even for repeated labels.
+    out$label <- make.unique(out$label)
+    out
 }
 
 .bamscale_decode_tag_sentinel <- function(df, tag_names) {
@@ -1271,11 +1578,18 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
     }
 
     if (identical(as, "GAlignmentPairs")) {
+        # The mcols of each mate hold the requested fields and tags that are
+        # not alignment slots (as for as = "GAlignments").
+        mcol_names <- setdiff(
+            unique(c(what, tag, if (isTRUE(with.which_label)) "which_label")),
+            c("rname", "pos", "cigar", "strand")
+        )
         return(.bamscale_as_galignment_pairs(
             selected_df,
             raw_df,
             use.names = use.names,
-            selected_names = selected_names
+            selected_names = selected_names,
+            mcol_names = mcol_names
         ))
     }
 
@@ -1399,9 +1713,29 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
 # maximal seqnames/strand runs (1-based codes into header order / c("+","-","*"))
 # and materialised the cigar with a CHARSXP cache -- so this function only wraps
 # slots: no which()/[idx] subsetting, no Rle() scan over n elements.
-# `new2(check = FALSE)` skips the O(n) CIGAR re-validation (the reader emits only
-# structurally valid CIGARs); if that internal is unavailable the plain validated
-# constructor produces an identical object.
+#
+# Validity. GAlignments' validity method checks, per element: seqnames is an
+# unnamed factor-Rle without NAs whose levels equal seqlevels(seqinfo); start is
+# an unnamed integer without NAs; cigar is an unnamed character without NAs that
+# parses as a CIGAR; strand is an unnamed factor-Rle without NAs and levels
+# c("+", "-", "*"); names and mcols (like all slots) are parallel to the object;
+# and (as a warning only) every alignment lies within its sequence.
+# galignments_cpp() guarantees all of these by construction for every record it
+# emits: seqnames codes come from a refID already checked to be in
+# [0, n_targets), and the factor levels and the Seqinfo are built from the same
+# header vector; start is BAM pos + 1 (NA only for a non-conforming pos that
+# does not fit in an R integer, which is counted as out of bound); strand codes
+# are 1 or 2; all columns get exactly one entry per kept record. What it cannot
+# guarantee by construction -- a CIGAR with an op code above 8 or a zero-length
+# op (which the validity method may reject), and an out-of-bound alignment -- it
+# counts per record, and any non-zero count sends the object through
+# validObject(), so an invalid object is never returned and out-of-bound
+# alignments warn as with readGAlignments(). The O(n) R-side
+# re-check (~13% of read time on a 47M-alignment BAM) is skipped only when the
+# C++ pass has shown it would succeed. The object is assembled from a valid
+# prototype by ordinary slot assignment, which checks each slot's class.
+# options(BamScaleR.ga_fastpath = FALSE) selects the generic path, which uses
+# the validating constructor unconditionally.
 .bamscale_ga_from_payload <- function(payload, what_final, use.names = FALSE) {
     lv <- as.character(payload$seqnames_header)
     sq <- S4Vectors::Rle(
@@ -1433,37 +1767,27 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
         methods::new("DFrame", listData = payload$mcols[mcn], nrows = n)
     }
 
-    nm <- if (isTRUE(use.names) && "qname" %in% what_final) {
+    nm <- if (isTRUE(use.names) && !is.null(payload$mcols$qname)) {
         as.character(payload$mcols$qname)
     } else {
         NULL
     }
 
-    tryCatch(
-        S4Vectors:::new2(
-            "GAlignments",
-            seqnames = sq,
-            start = as.integer(payload$start),
-            cigar = as.character(payload$cigar),
-            strand = st,
-            NAMES = nm,
-            elementMetadata = mc,
-            seqinfo = si,
-            check = FALSE
-        ),
-        error = function(e) {
-            methods::new(
-                "GAlignments",
-                seqnames = sq,
-                start = as.integer(payload$start),
-                cigar = as.character(payload$cigar),
-                strand = st,
-                NAMES = nm,
-                elementMetadata = mc,
-                seqinfo = si
-            )
-        }
-    )
+    ga <- methods::new("GAlignments")
+    ga@NAMES <- nm
+    ga@seqnames <- sq
+    ga@start <- as.integer(payload$start)
+    ga@cigar <- as.character(payload$cigar)
+    ga@strand <- st
+    ga@elementMetadata <- mc
+    ga@seqinfo <- si
+
+    needs_check <- !identical(as.numeric(payload$n_nonstandard_cigar), 0) ||
+        !identical(as.numeric(payload$n_out_of_bound), 0)
+    if (needs_check) {
+        methods::validObject(ga)
+    }
+    ga
 }
 
 .bamscale_as_galignments <- function(selected_df, raw_df, use.names = FALSE, selected_names = names(selected_df), row_index = NULL) {
@@ -1482,10 +1806,6 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
         which(!is.na(selected_df$pos) & !is.na(rname_col))
     } else {
         as.integer(row_index)
-    }
-
-    if (length(idx) == 0L) {
-        return(GenomicAlignments::GAlignments())
     }
 
     selected_names <- intersect(selected_names, names(selected_df))
@@ -1531,15 +1851,17 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
     ga_args$elementMetadata <- .bamscale_subset_metadata(selected_df, idx, extra_names)
     ga <- do.call(methods::new, ga_args)
 
-    if (isTRUE(use.names) && "qname" %in% selected_names) {
+    if (isTRUE(use.names) && "qname" %in% names(selected_df)) {
         names(ga) <- as.character(selected_df$qname[idx])
     }
 
     ga
 }
 
-.bamscale_as_galignment_pairs <- function(selected_df, raw_df, use.names = FALSE, selected_names = names(selected_df)) {
-    required <- c("qname", "flag", "rname", "pos", "cigar", "strand")
+.bamscale_as_galignment_pairs <- function(selected_df, raw_df, use.names = FALSE,
+                                          selected_names = names(selected_df),
+                                          mcol_names = character()) {
+    required <- c("qname", "flag", "rname", "pos", "cigar", "strand", "mrnm", "mpos")
     if (!all(required %in% selected_names)) {
         stop(
             "`as='GAlignmentPairs'` requires fields: ",
@@ -1549,94 +1871,45 @@ decode_seqqual_compact <- function(x, seq_col = "seq", qual_col = "qual", qwidth
         )
     }
 
+    # Single-end and unmapped records cannot be paired; they are dropped
+    # silently, as readGAlignmentPairs() drops them.
     flag <- as.integer(selected_df$flag)
     mapped <- !is.na(selected_df$pos) & !is.na(selected_df$rname)
     paired <- bitwAnd(flag, 0x1L) != 0L
-    keep <- mapped & paired
+    idx_keep <- which(mapped & paired)
 
-    if (any(!keep)) {
-        warning("Dropping non-paired or unmapped records for GAlignmentPairs output")
-    }
-
-    idx_keep <- which(keep)
-    if (length(idx_keep) == 0L) {
-        return(GenomicAlignments::GAlignmentPairs())
-    }
-
+    # Mates are matched by GenomicAlignments::makeGAlignmentPairs() (through
+    # findMateAlignment()): on the read name, each record's position against
+    # its mate's mate reference and position (mrnm, mpos), the strand,
+    # first/last, proper-pair and secondary flags. Records without a mate in
+    # the input, and ambiguous ones, are dropped.
+    mcol_names <- intersect(mcol_names, names(selected_df))
     ga <- .bamscale_as_galignments(
         selected_df,
         raw_df,
         use.names = FALSE,
-        selected_names = selected_names,
+        selected_names = unique(c(
+            "rname", "pos", "cigar", "strand", "flag", "mrnm", "mpos", mcol_names
+        )),
         row_index = idx_keep
     )
+    names(ga) <- as.character(selected_df$qname[idx_keep])
 
-    flag <- as.integer(selected_df$flag[idx_keep])
-    qname <- as.character(selected_df$qname[idx_keep])
-    idx_first <- which(bitwAnd(flag, 0x40L) != 0L)
-    idx_second <- which(bitwAnd(flag, 0x80L) != 0L)
-
-    if (length(idx_first) == 0L || length(idx_second) == 0L) {
-        warning("No complete first/second mate pairs detected")
-        return(GenomicAlignments::GAlignmentPairs())
-    }
-
-    split_first <- split(idx_first, qname[idx_first])
-    split_second <- split(idx_second, qname[idx_second])
-    keys <- intersect(names(split_first), names(split_second))
-
-    n_keys <- length(keys)
-    p1_parts <- vector("list", n_keys)
-    p2_parts <- vector("list", n_keys)
-    name_parts <- vector("list", n_keys)
-    dropped <- 0L
-
-    if (n_keys > 0L) {
-        for (i in seq_along(keys)) {
-            k <- keys[[i]]
-            f <- split_first[[k]]
-            s <- split_second[[k]]
-            n <- min(length(f), length(s))
-
-            if (n > 0L) {
-                p1_parts[[i]] <- f[seq_len(n)]
-                p2_parts[[i]] <- s[seq_len(n)]
-                name_parts[[i]] <- rep(k, n)
-            }
-
-            dropped <- dropped + abs(length(f) - length(s))
-        }
-
-        keep <- vapply(p1_parts, length, integer(1)) > 0L
-        p1 <- unlist(p1_parts[keep], use.names = FALSE)
-        p2 <- unlist(p2_parts[keep], use.names = FALSE)
-        pair_names <- unlist(name_parts[keep], use.names = FALSE)
-    } else {
-        p1 <- integer()
-        p2 <- integer()
-        pair_names <- character()
-    }
-
-    if (length(p1) == 0L) {
-        warning("No pairable first/second mate records remained after filtering")
-        return(GenomicAlignments::GAlignmentPairs())
-    }
-
-    first <- ga[p1]
-    second <- ga[p2]
-
-    pairs <- tryCatch(
-        GenomicAlignments::GAlignmentPairs(first, second),
-        error = function(e) GenomicAlignments::makeGAlignmentPairs(first, second)
+    pairs <- GenomicAlignments::makeGAlignmentPairs(
+        ga,
+        use.names = isTRUE(use.names),
+        use.mcols = mcol_names,
+        strandMode = 1L
     )
 
-    if (isTRUE(use.names)) {
-        names(pairs) <- pair_names
-    }
-
-    if (dropped > 0L) {
-        warning("Dropped ", dropped, " unpaired mate records while forming GAlignmentPairs")
-    }
-
-    pairs
+    # Order the pairs as readGAlignmentPairs() does, by the position of the
+    # first mate. (Pairs whose first mates start at the same position keep the
+    # order makeGAlignmentPairs() gives them, which can differ from
+    # readGAlignmentPairs().)
+    f <- GenomicAlignments::first(pairs)
+    o <- order(
+        as.integer(GenomicAlignments::seqnames(f)),
+        GenomicAlignments::start(f)
+    )
+    pairs[o]
 }

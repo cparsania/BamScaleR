@@ -37,3 +37,11 @@ bam_coverage_bigwig_cpp <- function(bam_file, out_file, n_threads, min_mapq, fla
     .Call(`_BamScaleR_bam_coverage_bigwig_cpp`, bam_file, out_file, n_threads, min_mapq, flag_require_set, flag_require_unset, n_zooms, compress_level, parallel, verbose)
 }
 
+openmp_max_threads_cpp <- function() {
+    .Call(`_BamScaleR_openmp_max_threads_cpp`)
+}
+
+openmp_fork_info_cpp <- function() {
+    .Call(`_BamScaleR_openmp_fork_info_cpp`)
+}
+

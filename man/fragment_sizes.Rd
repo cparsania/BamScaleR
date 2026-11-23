@@ -19,7 +19,9 @@ fragment_sizes(
 of them.}
 
 \item{param}{Optional \link[Rsamtools:ScanBamParam]{Rsamtools::ScanBamParam} (or a compatible list). Only
-its \code{flag} and \code{mapqFilter} are honoured, applied per read in C++ -- e.g.
+its \code{flag} and \code{mapqFilter} are honoured, applied per read in C++ (other
+settings that would change the result, such as \code{which}, give a warning)
+-- e.g.
 \code{Rsamtools::ScanBamParam(flag = Rsamtools::scanBamFlag( isSecondaryAlignment = FALSE, isUnmappedQuery = FALSE, isNotPassingQualityControls = FALSE))} to reproduce the standard ATAC
 fragment-size filter.}
 
@@ -34,11 +36,11 @@ when \code{file} has more than one element.}
 dense histogram and larger ones in an overflow map. Every observed size is
 returned exactly regardless of this value (default \code{1e5}).}
 
-\item{drop_mate_unmapped}{Logical; if \code{TRUE} (default), reads whose mate is
-unmapped (SAM flag \code{0x8}) are excluded -- matching \code{Rsamtools::scanBam},
-which reports their \code{isize} as \code{NA} (no defined template length), so that
-\code{table(abs(isize))} drops them. Set \code{FALSE} to tally \code{abs(TLEN)} over all
-flag-passing reads.}
+\item{drop_mate_unmapped}{Logical; if \code{TRUE} (default), reads that are
+unmapped or whose mate is unmapped (SAM flags \code{0x4}, \code{0x8}) are excluded --
+matching \code{Rsamtools::scanBam}, which reports their \code{isize} as \code{NA} (no
+defined template length), so that \code{table(abs(isize))} drops them. Set
+\code{FALSE} to tally \code{abs(TLEN)} over all flag-passing reads.}
 }
 \value{
 A \code{data.frame} with columns \code{fragment_size} (integer \code{abs(TLEN)}) and

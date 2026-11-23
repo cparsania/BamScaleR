@@ -380,10 +380,14 @@ bigWigFile_t *bwOpen(const char *fname, CURLcode (*callBack) (CURL*), const char
         }
     } else {
         bwg->isWrite = 1;
-        bwg->URL = urlOpen(fname, NULL, "w+");
-        if(!bwg->URL) goto error;
+        //BamScaleR: binary mode, or Windows translates "\n" to "\r\n" and
+        //corrupts the file.
+        bwg->URL = urlOpen(fname, NULL, "w+b");
+        //BamScaleR: nothing has been written yet, so do not let bwClose()
+        //finalize the file (bwFinalize() would dereference a NULL buffer).
+        if(!bwg->URL) { bwg->isWrite = 0; goto error; }
         bwg->writeBuffer = calloc(1,sizeof(bwWriteBuffer_t));
-        if(!bwg->writeBuffer) goto error;
+        if(!bwg->writeBuffer) { bwg->isWrite = 0; goto error; }
         bwg->writeBuffer->l = 24;
     }
 

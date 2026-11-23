@@ -18,8 +18,8 @@ of them.}
 
 \item{param}{Optional \link[Rsamtools:ScanBamParam]{Rsamtools::ScanBamParam} (or a compatible list). Only its
 \code{flag} and \code{mapqFilter} are honoured, applied per read in C++. With the default
-\code{NULL} the filter matches \code{readGAlignments()} (drop only unmapped reads). Note
-that \code{which} (region) restriction is not applied.}
+\code{NULL} the filter matches \code{readGAlignments()} (drop only unmapped reads).
+\code{which} (region) restriction is not applied; setting it gives a warning.}
 
 \item{threads}{Number of OpenMP threads for within-file decoding.}
 

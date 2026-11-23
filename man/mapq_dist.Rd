@@ -17,8 +17,11 @@ mapq_dist(
 of them.}
 
 \item{param}{Optional \link[Rsamtools:ScanBamParam]{Rsamtools::ScanBamParam} (or a compatible list). Only
-its \code{flag} and \code{mapqFilter} are honoured, applied per read in C++. Note that
-a non-zero \code{mapqFilter} removes reads below that MAPQ from the distribution.}
+its \code{flag} and \code{mapqFilter} are honoured, applied per read in C++ (other
+settings that would change the result, such as \code{which}, give a warning).
+Note that a non-zero \code{mapqFilter} removes reads below that MAPQ from the
+distribution. Unmapped reads (SAM flag \code{0x4}) have no mapping quality --
+\code{Rsamtools::scanBam()} reports \code{NA} for them -- and are never counted.}
 
 \item{threads}{Number of OpenMP threads for within-file decoding.}
 
