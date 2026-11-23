@@ -712,7 +712,7 @@ sessionInfo()
 #> [1] stats     graphics  grDevices utils     datasets  methods   base     
 #> 
 #> other attached packages:
-#> [1] BamScaleR_0.99.3 BiocStyle_2.40.0
+#> [1] BamScaleR_0.99.4 BiocStyle_2.40.0
 #> 
 #> loaded via a namespace (and not attached):
 #>  [1] SummarizedExperiment_1.42.0 rjson_0.2.23               
