@@ -1,5 +1,11 @@
 # Changelog
 
+## BamScaleR 0.99.5
+
+- No code changes. Version bump so the Bioconductor submission bot
+  reports the build of this version (its report labelled 0.99.4 showed
+  the 0.99.3 build).
+
 ## BamScaleR 0.99.4
 
 ### Bug fixes
