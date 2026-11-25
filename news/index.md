@@ -1,5 +1,23 @@
 # Changelog
 
+## BamScaleR 0.99.6
+
+### Build
+
+- Only C++ code now uses OpenMP. The parallel block compression of the
+  vendored libBigWig writer moved from C (`bwWrite.c`) to C++
+  (`src/bw_compress.cpp`), so `src/Makevars` and `src/Makevars.win` no
+  longer put `$(SHLIB_OPENMP_CFLAGS)` in `PKG_CFLAGS`. This removes the
+  `R CMD check --as-cran` NOTE “SHLIB_OPENMP_CFLAGS is included in
+  PKG_CFLAGS but not in PKG_LIBS”, and follows Writing R Extensions
+  (section 1.2.1.1), which notes that using OpenMP from more than one of
+  C, C++ and Fortran in a package is not portable. bigWig output is
+  unchanged (byte-identical).
+- `configure` (macOS) no longer probes C OpenMP flags, and
+  `BAMSCALER_OPENMP_CFLAGS` is no longer read. OpenMP flags that a
+  user’s own configuration applies to C code (for example
+  `CFLAGS += -Xclang -fopenmp`) no longer stop the installation.
+
 ## BamScaleR 0.99.5
 
 - No code changes. Version bump so the Bioconductor submission bot

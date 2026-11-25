@@ -7,7 +7,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">BamScaleR</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.99.5</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.99.6</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -38,6 +38,15 @@
       <small>Source: <a href="https://github.com/cparsania/BamScaleR/blob/main/NEWS.md" class="external-link"><code>NEWS.md</code></a></small>
     </div>
 
+    <div class="section level2">
+<h2 class="pkg-version" data-toc-text="0.99.6" id="bamscaler-0996">BamScaleR 0.99.6<a class="anchor" aria-label="anchor" href="#bamscaler-0996"></a></h2>
+<div class="section level3">
+<h3 id="build-0-99-6">Build<a class="anchor" aria-label="anchor" href="#build-0-99-6"></a></h3>
+<ul><li>Only C++ code now uses OpenMP. The parallel block compression of the vendored libBigWig writer moved from C (<code>bwWrite.c</code>) to C++ (<code>src/bw_compress.cpp</code>), so <code>src/Makevars</code> and <code>src/Makevars.win</code> no longer put <code>$(SHLIB_OPENMP_CFLAGS)</code> in <code>PKG_CFLAGS</code>. This removes the <code>R CMD check --as-cran</code> NOTE “SHLIB_OPENMP_CFLAGS is included in PKG_CFLAGS but not in PKG_LIBS”, and follows Writing R Extensions (section 1.2.1.1), which notes that using OpenMP from more than one of C, C++ and Fortran in a package is not portable. bigWig output is unchanged (byte-identical).</li>
+<li>
+<code>configure</code> (macOS) no longer probes C OpenMP flags, and <code>BAMSCALER_OPENMP_CFLAGS</code> is no longer read. OpenMP flags that a user’s own configuration applies to C code (for example <code>CFLAGS += -Xclang -fopenmp</code>) no longer stop the installation.</li>
+</ul></div>
+</div>
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.99.5" id="bamscaler-0995">BamScaleR 0.99.5<a class="anchor" aria-label="anchor" href="#bamscaler-0995"></a></h2>
 <ul><li>No code changes. Version bump so the Bioconductor submission bot reports the build of this version (its report labelled 0.99.4 showed the 0.99.3 build).</li>

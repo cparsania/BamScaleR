@@ -712,7 +712,7 @@ sessionInfo()
 #> [1] stats     graphics  grDevices utils     datasets  methods   base     
 #> 
 #> other attached packages:
-#> [1] BamScaleR_0.99.5 BiocStyle_2.40.0
+#> [1] BamScaleR_0.99.6 BiocStyle_2.40.0
 #> 
 #> loaded via a namespace (and not attached):
 #>  [1] SummarizedExperiment_1.42.0 rjson_0.2.23               
@@ -720,7 +720,7 @@ sessionInfo()
 #>  [5] Biobase_2.72.0              lattice_0.23-1             
 #>  [7] tools_4.6.2                 bitops_1.1-0               
 #>  [9] generics_0.1.4              stats4_4.6.2               
-#> [11] curl_8.1.0                  parallel_4.6.2             
+#> [11] curl_8.2.0                  parallel_4.6.2             
 #> [13] Matrix_1.7-6                desc_1.4.3                 
 #> [15] S4Vectors_0.50.3            cigarillo_1.2.1            
 #> [17] lifecycle_1.0.5             compiler_4.6.2             
