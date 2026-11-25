@@ -38,9 +38,9 @@
 # it, and the package is built without OpenMP rather than failing to load.
 #
 # To override detection, set BOTH BAMSCALER_OPENMP_CXXFLAGS and
-# BAMSCALER_OPENMP_LIBS (and optionally BAMSCALER_OPENMP_CFLAGS) in the
-# environment; they are used as-is, without probing. Set both to empty strings
-# for a build without OpenMP.
+# BAMSCALER_OPENMP_LIBS in the environment; they are used as-is, without
+# probing. Set both to empty strings for a build without OpenMP. Only C++ code
+# in the package uses OpenMP, so no C flags are needed.
 
 : "${R_HOME:=`R RHOME`}"
 if test -z "${R_HOME}"; then
@@ -50,13 +50,11 @@ fi
 RBIN="${R_HOME}/bin/R"
 
 OMP_CXXFLAGS='$(SHLIB_OPENMP_CXXFLAGS)'
-OMP_CFLAGS='$(SHLIB_OPENMP_CFLAGS)'
 OMP_LIBS='$(SHLIB_OPENMP_CXXFLAGS)'
 OMP_NOTE="R's SHLIB_OPENMP_* macros"
 
 no_openmp() {
     OMP_CXXFLAGS=""
-    OMP_CFLAGS=""
     OMP_LIBS=""
     OMP_NOTE="none ($1)"
 }
@@ -71,7 +69,7 @@ cleanup_probe() {
     fi
 }
 
-# try_openmp CXXFLAGS CFLAGS LIBS -> exit status 0 if the probe builds and loads.
+# try_openmp CXXFLAGS LIBS -> exit status 0 if the probe builds and loads.
 # Every PKG_* variable is set explicitly (as in src/Makevars) so that values
 # exported in the environment cannot make the probe differ from the real build.
 try_openmp() {
@@ -80,18 +78,15 @@ try_openmp() {
         echo "CXX_STD = CXX17"
         echo "PKG_CPPFLAGS = -DNOCURL"
         echo "PKG_CXXFLAGS = $1"
-        echo "PKG_CFLAGS = $2"
-        echo "PKG_LIBS = $3"
+        echo "PKG_LIBS = $2"
     } > "${probe_dir}/Makevars"
     (
         cd "${probe_dir}" &&
-        "${RBIN}" CMD SHLIB -o omp_probe.so omp_probe_cxx.cpp omp_probe_c.c \
-            >> config.log 2>&1 &&
+        "${RBIN}" CMD SHLIB -o omp_probe.so omp_probe_cxx.cpp >> config.log 2>&1 &&
         "${RBIN}" --vanilla --no-echo -e '
             dyn.load("omp_probe.so")
             n <- .C("bamscaler_omp_probe_cxx", n = 0L)$n
-            m <- .C("bamscaler_omp_probe_c", n = 0L)$n
-            if (!isTRUE(n >= 1L) || !isTRUE(m >= 1L)) quit(status = 1L)
+            if (!isTRUE(n >= 1L)) quit(status = 1L)
         ' >> config.log 2>&1
     )
 }
@@ -119,7 +114,8 @@ probe_darwin() {
 #ifndef _OPENMP
 #error "OpenMP is not enabled"
 #endif
-// Uses the OpenMP constructs found in src/bamscale.cpp and the ompBAM headers,
+// Uses the OpenMP constructs found in src/bamscale.cpp, src/bw_compress.cpp
+// and the ompBAM headers (only C++ code in the package uses OpenMP),
 // so every runtime entry point the package needs is resolved at dyn.load().
 extern "C" void bamscaler_omp_probe_cxx(int* n) {
     int count = 0, s32 = 0, d32 = 0;
@@ -147,21 +143,6 @@ extern "C" void bamscaler_omp_probe_cxx(int* n) {
     *n = (s32 == 4 && d32 == 4 && d64 == 4 && omp_get_max_threads() >= 1) ? count : 0;
 }
 EOF
-    cat > "${probe_dir}/omp_probe_c.c" <<'EOF'
-#ifndef _OPENMP
-#error "OpenMP is not enabled"
-#endif
-/* As in src/libBigWig/bwWrite.c: a dynamic loop over a 64-bit index. */
-void bamscaler_omp_probe_c(int* n) {
-    int count = 0;
-#pragma omp parallel for num_threads(2) schedule(dynamic, 32)
-    for (long long i = 0; i < 4; i++) {
-#pragma omp atomic
-        count += 1;
-    }
-    *n = count == 4 ? 1 : 0;
-}
-EOF
 
     R_LIBOMP_DIR=""
     if test -f "${R_HOME}/lib/libomp.dylib"; then
@@ -175,8 +156,7 @@ EOF
         fi
     done
 
-    # Each candidate: compile flags | link flags. Compile flags are used for
-    # both C++ and C (clang is the compiler for both on macOS).
+    # Each candidate: compile flags (for C++) | link flags.
     set -- \
         '$(SHLIB_OPENMP_CXXFLAGS)|$(SHLIB_OPENMP_CXXFLAGS)'
     if test -n "${R_LIBOMP_DIR}"; then
@@ -197,11 +177,9 @@ EOF
     for cand in "$@"; do
         c_flags=`echo "${cand}" | sed 's/|.*$//'`
         l_flags=`echo "${cand}" | sed 's/^[^|]*|//'`
-        cc_flags=`echo "${c_flags}" | sed 's/SHLIB_OPENMP_CXXFLAGS/SHLIB_OPENMP_CFLAGS/'`
         echo "--- candidate: compile '${c_flags}' link '${l_flags}'" >> "${probe_dir}/config.log"
-        if try_openmp "${c_flags}" "${cc_flags}" "${l_flags}"; then
+        if try_openmp "${c_flags}" "${l_flags}"; then
             OMP_CXXFLAGS="${c_flags}"
-            OMP_CFLAGS="${cc_flags}"
             OMP_LIBS="${l_flags}"
             OMP_NOTE="macOS probe (compile '${c_flags}', link '${l_flags}')"
             return 0
@@ -210,35 +188,29 @@ EOF
 
     # A build without OpenMP flags only helps if the compiler then really
     # builds without OpenMP. If the user's own flags (for example
-    # CPPFLAGS += -Xclang -fopenmp or CFLAGS += -Xclang -fopenmp in
-    # ~/.R/Makevars) turn OpenMP on for every package, the result would still
-    # need a runtime and fail to load. Check C++ and C, with the PKG_*
-    # variables set as in the real build.
+    # CPPFLAGS += -Xclang -fopenmp or CXX17FLAGS += -Xclang -fopenmp in
+    # ~/.R/Makevars) turn OpenMP on for every package, the C++ code would still
+    # need a runtime and fail to load. (The C code has no OpenMP constructs, so
+    # OpenMP flags for C do no harm.) Check C++, with the PKG_* variables set
+    # as in the real build.
     cat > "${probe_dir}/omp_plain.cpp" <<'EOF'
 #ifdef _OPENMP
 #error "BAMSCALER: OpenMP is enabled by the user's own compiler flags"
 #endif
 extern "C" void bamscaler_plain(int* n) { *n = 1; }
 EOF
-    cat > "${probe_dir}/omp_plain_c.c" <<'EOF'
-#ifdef _OPENMP
-#error "BAMSCALER: OpenMP is enabled by the user's own compiler flags"
-#endif
-void bamscaler_plain_c(int* n) { *n = 1; }
-EOF
     rm -f "${probe_dir:?}"/*.o "${probe_dir:?}"/*.so
     {
         echo "CXX_STD = CXX17"
         echo "PKG_CPPFLAGS = -DNOCURL"
         echo "PKG_CXXFLAGS ="
-        echo "PKG_CFLAGS ="
         echo "PKG_LIBS ="
     } > "${probe_dir}/Makevars"
     (cd "${probe_dir}" &&
-        "${RBIN}" CMD SHLIB -o omp_plain.so omp_plain.cpp omp_plain_c.c >> config.log 2>&1)
+        "${RBIN}" CMD SHLIB -o omp_plain.so omp_plain.cpp >> config.log 2>&1)
     if grep -q "BAMSCALER: OpenMP is enabled by the user" "${probe_dir}/config.log"; then
         user_omp=""
-        for v in CPPFLAGS CFLAGS CXX17FLAGS CC CXX17; do
+        for v in CPPFLAGS CXX17FLAGS CXX17; do
             f=`"${RBIN}" CMD config "${v}" 2>/dev/null | tr ' ' '\n' | grep -i 'openmp' | tr '\n' ' '`
             if test -n "${f}"; then user_omp="${user_omp} ${v}: ${f}"; fi
         done
@@ -246,7 +218,7 @@ EOF
             echo "*** BamScaleR: no working OpenMP setup was found, and OpenMP is"
             echo "*** switched on by your own compiler flags, which apply to every"
             echo "*** package (for example 'CPPFLAGS += -Xclang -fopenmp' or"
-            echo "*** 'CFLAGS += -Xclang -fopenmp' in ~/.R/Makevars), so a build"
+            echo "*** 'CXX17FLAGS += -Xclang -fopenmp' in ~/.R/Makevars), so a build"
             echo "*** without OpenMP is not possible either."
             if test -n "${user_omp}"; then
                 echo "*** OpenMP flags in R's configuration:${user_omp}"
@@ -281,15 +253,13 @@ EOF
     return 0
 }
 
-if test -n "${BAMSCALER_OPENMP_CXXFLAGS+set}" || test -n "${BAMSCALER_OPENMP_LIBS+set}" ||
-   test -n "${BAMSCALER_OPENMP_CFLAGS+set}"; then
+if test -n "${BAMSCALER_OPENMP_CXXFLAGS+set}" || test -n "${BAMSCALER_OPENMP_LIBS+set}"; then
     if test -z "${BAMSCALER_OPENMP_CXXFLAGS+set}" || test -z "${BAMSCALER_OPENMP_LIBS+set}"; then
         echo "configure: set both BAMSCALER_OPENMP_CXXFLAGS and BAMSCALER_OPENMP_LIBS" >&2
         echo "configure: (either may be empty), or neither to detect the flags." >&2
         exit 1
     fi
     OMP_CXXFLAGS="${BAMSCALER_OPENMP_CXXFLAGS}"
-    OMP_CFLAGS="${BAMSCALER_OPENMP_CFLAGS-${BAMSCALER_OPENMP_CXXFLAGS}}"
     OMP_LIBS="${BAMSCALER_OPENMP_LIBS}"
     OMP_NOTE="BAMSCALER_OPENMP_* environment variables"
 elif test "`uname -s`" = "Darwin"; then
@@ -309,7 +279,6 @@ fi
 
 echo "BamScaleR OpenMP flags from ${OMP_NOTE}:"
 echo "  compile (C++): ${OMP_CXXFLAGS}"
-echo "  compile (C):   ${OMP_CFLAGS}"
 echo "  link:          ${OMP_LIBS}"
 
 # Escape characters that are special in a sed replacement (\ & and the |
@@ -318,11 +287,9 @@ sed_escape() {
     printf '%s\n' "$1" | sed -e 's/[\\&|]/\\&/g'
 }
 E_CXXFLAGS=`sed_escape "${OMP_CXXFLAGS}"`
-E_CFLAGS=`sed_escape "${OMP_CFLAGS}"`
 E_LIBS=`sed_escape "${OMP_LIBS}"`
 
 if ! sed -e "s|@OPENMP_CXXFLAGS@|${E_CXXFLAGS}|" \
-        -e "s|@OPENMP_CFLAGS@|${E_CFLAGS}|" \
         -e "s|@OPENMP_LIBS@|${E_LIBS}|" \
         src/Makevars.in > src/Makevars.new || ! test -s src/Makevars.new; then
     rm -f src/Makevars.new

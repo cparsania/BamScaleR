@@ -26,6 +26,11 @@ int bwsVerbose = 0;   /* BamScaleR: print bwFinalize phase timings when != 0 */
 /* BamScaleR: OpenMP threads for parallel block compression; set by the caller
  * from its `threads` argument so the writer never uses more threads than that. */
 int bwsThreads = 1;
+/* BamScaleR: compresses the blocks across bwsThreads OpenMP threads. Defined in
+ * src/bw_compress.cpp so that only C++ code in the package uses OpenMP. */
+int bamscale_compress_blocks(unsigned char **dst, uLongf *dstLen, uLongf bound,
+                             unsigned char **src, const uLongf *srcLen, long long n,
+                             int level, int nthreads);
 /* BamScaleR: the bwAddInterval and bwAppendInterval functions return an error
  * when a flush inside their loops fails (upstream ignored it, so a failed
  * write, e.g. a full disk, overran the write buffer). */
@@ -366,21 +371,9 @@ static int bwsWriteBlocks(bigWigFile_t *fp, unsigned char **src, uLongf *srcLen,
     bound = compressBound(fp->hdr->bufSize);
     for(i = 0; i < n; i++) dst[i] = NULL;
     for(i = 0; i < n; i++) { dst[i] = malloc(bound); if(!dst[i]) err = 1; }
-    if(!err) {
-#ifdef _OPENMP
-        #pragma omp parallel for num_threads(bwsThreads > 1 ? bwsThreads : 1) schedule(dynamic, 32)
-#endif
-        for(long long j = 0; j < (long long)n; j++) {
-            uLongf sz = bound;
-            if(compress2(dst[j], &sz, src[j], srcLen[j], bwCompressLevel) != Z_OK) {
-#ifdef _OPENMP
-                #pragma omp atomic write
-#endif
-                err = 1;
-            }
-            dstLen[j] = sz;
-        }
-    }
+    // The OpenMP loop is in C++ (src/bw_compress.cpp), so no C code uses OpenMP.
+    if(!err) err = bamscale_compress_blocks(dst, dstLen, bound, src, srcLen,
+                                            (long long)n, bwCompressLevel, bwsThreads);
     if(!err) {
         for(i = 0; i < n; i++) {
             long off = bwTell(fp);
